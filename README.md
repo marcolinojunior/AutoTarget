@@ -1,73 +1,56 @@
-# AutoTarget - Wiki & Documentação do Projeto
+# AutoTarget
 
-## 1. O que é o AutoTarget? (O Porquê do Projeto)
-O AutoTarget é um simulador de sistema de defesa automatizado desenvolvido nativamente para dispositivos Android, utilizando a linguagem de programação Java.
-
-**Objetivo Intelectual e Prático (Foco AV1):**
-O desenvolvimento da versão inicial (**AV1**) foca na fundação escalável do jogo, aplicando na prática:
-- **Programação Concorrente & Threads:** Múltiplas entidades (Alvos, Canhões, Projéteis, Jogo) operando em tempo real como threads independentes.
-- **Sincronização:** Uso de `synchronized` e travas para proteger o acesso às listas globais (Região Crítica), evitando *Race Conditions*.
-- **POO Avançada:** Aplicação de herança, polimorfismo (`AlvoComum` vs `AlvoRapido`), e tratamento de erros customizado com a classe `JogoException`.
-- **Testes Unitários:** Validação das regras de negócio e de movimentação com **JUnit**.
-- **Serviços em Background:** Integração inicial de simulação de sensores, reconciliação de dados e comunicação segura (Criptografia) com Firestore (Firebase).
-
-O cenário base da **AV1** consiste num canvas unificado onde alvos circulares surgem aleatoriamente e o jogador pode posicionar canhões automáticos (que disparam proativamente nas ameaças mais próximas).
+**Universidade Federal de Lavras (UFLA)**  
+**Curso:** Engenharia de Controle e Automação  
+**Disciplina:** GAT108 - Automação Avançada  
 
 ---
 
-## 2. Como foi feito? (Arquitetura e Concorrência)
-O jogo foi construído utilizando o **Android Studio**, com a interface de jogo (UI) principal renderizada num Canvas através do componente nativo `SurfaceView`.
-Para gerenciar a lógica de milhares de interações espaciais, o AutoTarget adota uma arquitetura multi-threaded baseada no padrão produtor-consumidor e loop autônomo:
+## Visão Geral do Jogo
 
-- **UI Thread (Renderização):** Apenas desenha os elementos no quadro (Canvas) em `GameSurfaceView`.
-- **Thread Jogo (Loop Principal):** Controla o tempo de partida, orquestra colisões complexas e atua na energia/placar da tela (sempre de forma sincronizada).
-- **Thread por Entidade (Alvo, Canhão, Projétil):** Cada instância criada no jogo atua iterativamente no seu próprio `run()`. Devido à alteração do mesmo espaço de memória (listas de projéteis e alvos), utilizamos blocos de sincronização (ex: `synchronized` e travas/locks) que tratam _Race Conditions_.
-- **Threads de Backgound (Serviços):** Telemetria assíncrona; como os `SensorThread`, a `ReconciliacaoThread` atuando em cálculo pesado e a camada de Input/Output do `FirebaseIOThread`.
+O AutoTarget é um simulador de defesa em tela dividida onde canhões automáticos devem interceptar alvos móveis. O sistema exige uma forte gestão de recursos, visto que a movimentação e os disparos geram consumo de energia, requerendo otimização contínua para manter a defesa do sistema operante.
 
----
+O ambiente de simulação opera em tempo real e lida com múltiplos objetos calculando simultaneamente o uso de recursos, verificação de trajetórias e a eficiência geral dos disparos.
 
-## 3. Estrutura de Arquivos e Código (A Wiki)
+## Status Atual (Foco na AV1)
 
-Abaixo está o detalhamento wiki de todo o código fonte e as responsabilidades dos arquivos implementados:
+A primeira avaliação do projeto (AV1) foi **concluída com sucesso**. O foco central até o momento foi o desenvolvimento de um motor puramente multithread do zero, priorizando sólidas bases em engenharia de software e concorrência:
 
-### 📦 Pacote `com.autotarget` (Módulo Principal)
-- **`MainActivity.java`**: A porta de entrada (Activity Android). Responsável por inicializar e sobrepor views, instanciando o `GameSurfaceView` no ciclo de vida correto (onCreate/onResume).
+*   **Programação Orientada a Objetos:** Uso ostensivo de herança e polimorfismo, aplicados especialmente à modelagem dos diferentes comportamentos dos Alvos.
+*   **Controle Manual e Rigoroso de Concorrência:** Para aprofundar o aprendizado em paralelismo, abolimos as coleções embutidas thread-safe. A sincronização de recursos compartilhados no jogo e a prevenção de falhas — como *Race Conditions* e `ConcurrentModificationException` — foram codificadas totalmente do zero, na mão, com intensa utilização de blocos `synchronized` e monitores.
+*   **Separação Arquitetural:** O projeto desacopla perfeitamente a lógica visual da lógica matemática:
+    *   A **Interface Gráfica** opera baseada em uma rotação de ciclos limpa conduzida pela `RenderThread`, cujo objetivo único é varrer o estado atual e renderizar componentes a frequências de ~30/60 FPS no Android.
+    *   A **Lógica de Física** atualiza exaustivamente as mecânicas, velocidades espaciais e colisões de forma paralela através de um `PhysicsTimer` independente.
 
-### 📦 Pacote `com.autotarget.engine`
-Núcleo do Game Engine 2D de tempo real.
-- **`GameSurfaceView.java`**: Estende `SurfaceView` e encapsula a tela de jogo. Ele pinta no _Canvas_ a divisão de áreas, os canhões, e processa os toques de tela iniciais.
-- **`Jogo.java`**: A Thread principal supervisora. Mantém e sincroniza o acesso às listas de alvos na tela, gerencia Game Over, tempos (60s) e pontuações de ambos os `Lados`.
+## Principais Componentes (Arquitetura)
 
-### 📦 Pacote `com.autotarget.model`
-Contém as regras vitais do simulador (Os "Models"). Como se trata de simulador autônomo de comportamento, as models são também `Threads`.
-- **`Alvo.java`**: Classe base Thread, contém coordenadas `(x, y)`, raio de hitbox, flags de estado `ativo` e a base matemática de navegação.
-- **`AlvoComum.java`**: Implementação base e herdeira de `Alvo`. Possui velocidade constante.
-- **`AlvoRapido.java`**: (*Polimorfismo*): Implementação de Alvo que sobrescreve atributos de movimento para possuir navegação superior e mais ágil.
-- **`Canhao.java`**: Fio de execução independente. Fica adormecido na tela (Thread suspensa ou em `sleep()`) de forma periódica até analisar e lançar autonomamente um novo `Projetil` com cálculos de seno/cosseno até o alvo ativo mais próximo.
-- **`Projetil.java`**: Thread gerada por canhões. Representa o tiro, viaja vetorialmente em linha reta do canhão até a coordenada alvo. A verificação rigorosa de *hitbox* ocorre no método `collide()`.
-- **`Lado.java`**: Enumeração prevista na arquitetura geral que ajuda a categorizar a posse das unidades, preparando o terreno para etapas competitivas.
+A espinha dorsal das entidades vivas se baseia na descentralização:
 
-### 📦 Pacote `com.autotarget.service`
-Camadas asíncronas para nuvem e cálculos extras sem penalidade de frames (60 FPS).
-- **`SensorThread.java`**: Fio de execução contínuo monitorando movimentações das coordenadas de forma periódica.
-- **`DataReconciliation.java` & `ReconciliacaoThread.java`**: Algoritmo central de reconciliação de dados. Otimiza, limpa e recalcula anomalias de sensores garantindo decisões assertivas de CPU virtual dos "Canhões".
-- **`Cryptography.java`**: Serviço de chaveação algorítmica para encriptar string JSON, focado em segurança orgânica da memória.
-- **`FirestoreRepository.java` & `FirebaseIOThread.java`**: Camada que envia e serializa dados das rodadas para o Google Firebase por debaixo da mesa de trabalho, garantindo não interrupção na IU (Input/Output).
+*   As classes **Alvo**, **Canhao** e **Projetil** são totalmente autônomas, executando suas lógicas ativas atreladas às suas próprias *Threads*.
+*   O objeto **Jogo** atua como o mediador global e gerenciador central. Ele inicializa as fases, orquestra o ciclo de vida dessas entidades em execução e gerencia interações vitais para unificar o fluxo, como as validações de acertos.
 
-### 📦 Pacote `com.autotarget.exception`
-- **`JogoException.java`**: Controla e encapsula quebras de regra do sistema. (ex: Criação de canhão excede limite ou saldo enérgico vazio).
+## Tecnologias Utilizadas
 
-### 📦 Diretório de Testes (`test/.../autotarget`)
-Bateria de testes construída utilizando o framework JUnit para atestar o pleno funcionamento antes mesmo do build em dispositivo final:
-- **`AlvoTest.java`**: Testa o avanço da geometria vetorial de movimento num plano X/Y abstrato.
-- **`CanhaoTest.java`**: Testa lógicas de inicialização e se projeta ângulos corretamente em relação à hitbox do alvo inimigo.
-- **`ProjetilTest.java`**: Testa a precisão teórica de verificação matemática de colisão da raio de interseção.
-- **`JogoExceptionTest.java`**: Garante que os limites das restrições definidas não falhem no modo de execução.
+*   **Linguagem:** Java
+*   **Renderização:** Android SDK (Canvas API via SurfaceView)
+*   **Testes:** JUnit 4
 
----
+## Próximos Passos (Trabalhos Futuros - AV2/AV3)
 
-## 4. Como Compilar (Build and Run)
-1. Efetue um "Clone" ou Checkout deste projeto utilizando Git.
-2. Abra seu **Android Studio (Bumblebee+ ou versão Hedgehog recomendada)**.
-3. Permita que o Wrapper do **Gradle** conclua suas dependências sincronizando os repositórios Maven `(Sync Project)`.
-4. Aperte o botão "Run / Play" (Shift + F10) na barra de ferramentas usando o app em Emulador ou Dispositivo Físico usando modo desenvolvedor e depuração USB.
+A base preparada durante a AV1 estrutura confortavelmente as próximas expansões arquiteturais. O Roadmap para as avaliações vindouras prevê:
+
+*   Desenvolvimento do subsistema de **Reconciliação de Dados**.
+*   Uso analítico e captação distribuída através de **Sensores Virtuais**.
+*   Aplicações backend contemplando **Persistência de Dados e Telemetria** utilizando os serviços do Firebase.
+*   Adição da camada protetiva de Criptografia para tráfego seguro de informações.
+
+## Como Executar
+
+1. Clone pelo terminal ou interface gráfica:
+   ```bash
+   git clone https://github.com/marcolinojunior/AutoTarget.git
+   ```
+2. Abra a pasta do projeto utilizando o **Android Studio**.
+3. Deixe o **Gradle** construir a indexação e baixar requerimentos automaticamente.
+4. Escolha ou levante um emulador de sua preferência (`AVD`), ou ainda conecte seu dispositivo físico (USB/Wi-Fi Debugging).
+5. Pressione **Run (Shift + F10)** para compilar o APK, implantar no dispositivo e inicializar a simulação.
