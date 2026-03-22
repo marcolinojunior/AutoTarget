@@ -88,6 +88,10 @@ public class Jogo {
                                 int reconciliacoes, Lado vencedor);
     }
 
+    /**
+     * Construtor da classe Jogo.
+     * Inicializa as listas e o estado da partida.
+     */
     public Jogo() {
         this.alvos = new ArrayList<>(); // CORREÇÃO 1
         this.canhoes = new ArrayList<>(); // CORREÇÃO 1
@@ -103,6 +107,12 @@ public class Jogo {
         this.cryptography = new Cryptography();
     }
 
+    /**
+     * Inicia a partida.
+     * Configura os temporizadores para geração de alvos, física e regras de negócio.
+     *
+     * @throws JogoException se o jogo já estiver em andamento.
+     */
     public synchronized void iniciar() throws JogoException {
         if (estado == Estado.RODANDO) {
             throw new JogoException("O jogo já está em execução!");
@@ -180,6 +190,9 @@ public class Jogo {
         notificarPontuacao();
     }
 
+    /**
+     * Interrompe imediatamente o jogo em andamento.
+     */
     public synchronized void pararJogo() {
         if (estado != Estado.RODANDO) return;
         estado = Estado.ENCERRADO;
@@ -278,6 +291,14 @@ public class Jogo {
         }
     }
 
+    /**
+     * Adiciona um novo canhão na partida.
+     *
+     * @param x a coordenada X inicial do canhão
+     * @param y a coordenada Y inicial do canhão
+     * @param lado o lado do canhão (ESQUERDO ou DIREITO)
+     * @throws JogoException se os limites de canhões forem excedidos ou não houver energia.
+     */
     public void adicionarCanhao(float x, float y, Lado lado) throws JogoException {
         if (x < 0 || x > larguraTela || y < 0 || y > alturaTela) {
             throw new JogoException(
@@ -337,7 +358,9 @@ public class Jogo {
     }
 
     /**
-     * Verifica colisões e atribui pontos ao lado correto.
+     * Verifica colisões ativas e atribui pontos ao lado correspondente.
+     *
+     * @return a quantidade de alvos destruídos na verificação.
      */
     public int verificarColisoes() {
         int destruidos = 0;
@@ -431,6 +454,12 @@ public class Jogo {
     public List<Canhao> getCanhoes() { return canhoes; }
     public Object getCollisionLock() { return collisionLock; }
 
+    /**
+     * Define as dimensões da tela de renderização.
+     *
+     * @param largura largura da tela
+     * @param altura altura da tela
+     */
     public void setDimensoesTela(int largura, int altura) {
         this.larguraTela = largura;
         this.alturaTela = altura;
@@ -439,8 +468,24 @@ public class Jogo {
     public int getLarguraTela() { return larguraTela; }
     public int getAlturaTela() { return alturaTela; }
 
+    /**
+     * Configura um listener para receber eventos do jogo.
+     *
+     * @param listener o listener para escutar
+     */
     public void setListener(OnJogoListener listener) { this.listener = listener; }
 
+    /**
+     * Recupera a energia máxima.
+     *
+     * @return a energia máxima
+     */
     public static float getEnergiaMaxima() { return ENERGIA_MAXIMA; }
+
+    /**
+     * Recupera o limiar de penalidade de canhões.
+     *
+     * @return o limiar de penalidade
+     */
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
 }

@@ -19,4 +19,13 @@
 
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+
+    <!-- Cores do GameSurfaceView -->
+    <color name="grid">#1E2A4A</color>
+    <color name="hud_bg">#AA16213E</color>
+    <color name="divisoria">#AAFFFFFF</color>
+    <color name="energia_fundo">#33FFFFFF</color>
+    <color name="overlay_fim">#CC1A1A2E</color>
+    <color name="box_fim">#16213E</color>
+    <color name="texto_inativo">#AAAAAA</color>
 </resources>

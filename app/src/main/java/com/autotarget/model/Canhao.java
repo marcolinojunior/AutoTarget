@@ -28,6 +28,17 @@ public class Canhao extends Thread {
     private int larguraTela;
     private int alturaTela;
 
+    /**
+     * Instancia um Canhão, que será uma Thread independente.
+     *
+     * @param x Coordenada X
+     * @param y Coordenada Y
+     * @param lado Lado ao qual pertence
+     * @param alvos Lista de alvos do jogo
+     * @param collisionLock Lock de colisão usado pelo Jogo
+     * @param larguraTela Largura total da tela
+     * @param alturaTela Altura total da tela
+     */
     public Canhao(float x, float y, Lado lado, List<Alvo> alvos,
                   Object collisionLock, int larguraTela, int alturaTela) {
         this.x = x;
@@ -57,6 +68,10 @@ public class Canhao extends Thread {
         }
     }
 
+    /**
+     * Calcula a direção e cria um projétil apontado para o alvo mais próximo
+     * do seu respectivo Lado da tela.
+     */
     public void disparar() {
         Alvo alvoMaisProximo = encontrarAlvoMaisProximoNoMesmoLado();
         if (alvoMaisProximo == null) {
@@ -121,6 +136,11 @@ public class Canhao extends Thread {
         }
     }
 
+    /**
+     * Aplica uma penalidade ao intervalo de disparo do canhão.
+     *
+     * @param penalidade true se deve sofrer penalidade, false caso contrário
+     */
     public void aplicarPenalidade(boolean penalidade) {
         if (penalidade) {
             this.intervaloDisparo = INTERVALO_DISPARO_BASE * 2;
@@ -129,6 +149,9 @@ public class Canhao extends Thread {
         }
     }
 
+    /**
+     * Encerra a execução do canhão e remove e destrói todos os projéteis pertencentes.
+     */
     public void pararCanhao() {
         this.ativo = false;
         synchronized (projeteis) { // CORREÇÃO 1: Sincronização manual na iteração de parada
@@ -139,17 +162,80 @@ public class Canhao extends Thread {
         }
     }
 
+    /**
+     * Recupera a posição X atual.
+     *
+     * @return Posição X
+     */
     public float getX() { return x; }
+
+    /**
+     * Recupera a posição Y atual.
+     *
+     * @return Posição Y
+     */
     public float getY() { return y; }
+
+    /**
+     * Recupera o ângulo do canhão.
+     *
+     * @return Ângulo
+     */
     public float getAngulo() { return angulo; }
+
+    /**
+     * Verifica se está ativo.
+     *
+     * @return true se ativo, false caso contrário
+     */
     public boolean isAtivo() { return ativo; }
+
+    /**
+     * Recupera o Lado.
+     *
+     * @return Lado do canhão
+     */
     public Lado getLado() { return lado; }
+
+    /**
+     * Retorna a lista de projéteis ativos.
+     *
+     * @return lista de Projétil
+     */
     public List<Projetil> getProjeteis() { return projeteis; }
+
+    /**
+     * Retorna o intervalo atual de disparo.
+     *
+     * @return intervalo em ms
+     */
     public int getIntervaloDisparo() { return intervaloDisparo; }
 
+    /**
+     * Atualiza o estado ativo.
+     *
+     * @param ativo boolean indicando novo estado
+     */
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
+
+    /**
+     * Atualiza a largura da tela.
+     *
+     * @param larguraTela Nova largura
+     */
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
+
+    /**
+     * Atualiza a altura da tela.
+     *
+     * @param alturaTela Nova altura
+     */
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
 
+    /**
+     * Recupera o intervalo de disparo base.
+     *
+     * @return o intervalo padrão
+     */
     public static int getIntervaloDisparoBase() { return INTERVALO_DISPARO_BASE; }
 }

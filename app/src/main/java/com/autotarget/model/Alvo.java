@@ -43,6 +43,8 @@ public abstract class Alvo extends Thread {
      * @param velocidade velocidade base de deslocamento (px/atualização)
      * @param larguraTela largura máxima do canvas
      * @param alturaTela  altura máxima do canvas
+     * @param canhoes lista com referências dos canhões em jogo
+     * @param collisionLock mecanismo de trava de concorrência global de colisões
      */
     protected final List<Canhao> canhoes;
     protected final Object collisionLock;
@@ -139,7 +141,11 @@ public abstract class Alvo extends Thread {
     /**
      * Calcula a distância euclidiana entre dois pontos.
      *
-     * @return distância em pixels
+     * @param x1 coordenada X do primeiro ponto
+     * @param y1 coordenada Y do primeiro ponto
+     * @param x2 coordenada X do segundo ponto
+     * @param y2 coordenada Y do segundo ponto
+     * @return distância euclidiana em pixels
      */
     public static float calcularDistancia(float x1, float y1, float x2, float y2) {
         float dx = x2 - x1;
@@ -149,14 +155,43 @@ public abstract class Alvo extends Thread {
 
     // ── Getters / Setters ────────────────────────────────────────
 
+    /**
+     * @return Coordenada X
+     */
     public float getX() { return x; }
+
+    /**
+     * @return Coordenada Y
+     */
     public float getY() { return y; }
+
+    /**
+     * @return Raio deste alvo
+     */
     public float getRaio() { return raio; }
+
+    /**
+     * @return Velocidade de deslocamento
+     */
     public float getVelocidade() { return velocidade; }
+
+    /**
+     * @return Flag booleana que indica se o alvo está ativo
+     */
     public boolean isAtivo() { return ativo; }
 
+    /**
+     * @param ativo Modificador do estado de ativação
+     */
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
 
+    /**
+     * @param larguraTela Novo limite da tela para o eixo X
+     */
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
+
+    /**
+     * @param alturaTela Novo limite da tela para o eixo Y
+     */
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
 }
