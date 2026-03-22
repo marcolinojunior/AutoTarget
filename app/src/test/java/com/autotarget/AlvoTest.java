@@ -3,8 +3,13 @@ package com.autotarget;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
 import com.autotarget.model.AlvoRapido;
+import com.autotarget.model.Canhao;
 
+import org.junit.Before;
 import org.junit.Test;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.*;
 
@@ -18,12 +23,20 @@ public class AlvoTest {
 
     private static final int LARGURA = 800;
     private static final int ALTURA = 600;
+    private List<Canhao> canhoes;
+    private Object collisionLock;
+
+    @Before
+    public void setUp() {
+        canhoes = new ArrayList<>();
+        collisionLock = new Object();
+    }
 
     // ── Testes de criação e polimorfismo ──────────────────────────
 
     @Test
     public void testCriacaoAlvoComum() {
-        AlvoComum alvo = new AlvoComum(100, 200, 30, 5, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(100, 200, 30, 5, LARGURA, ALTURA, canhoes, collisionLock);
 
         assertEquals(100f, alvo.getX(), 0.001f);
         assertEquals(200f, alvo.getY(), 0.001f);
@@ -35,8 +48,8 @@ public class AlvoTest {
     @Test
     public void testAlvoRapidoTemVelocidadeSuperior() {
         float velocidadeBase = 5f;
-        AlvoComum comum = new AlvoComum(100, 100, 20, velocidadeBase, LARGURA, ALTURA);
-        AlvoRapido rapido = new AlvoRapido(100, 100, 20, velocidadeBase, LARGURA, ALTURA);
+        AlvoComum comum = new AlvoComum(100, 100, 20, velocidadeBase, LARGURA, ALTURA, canhoes, collisionLock);
+        AlvoRapido rapido = new AlvoRapido(100, 100, 20, velocidadeBase, LARGURA, ALTURA, canhoes, collisionLock);
 
         // AlvoRapido deve ter velocidade efetiva 2x maior
         assertTrue("AlvoRapido deve ser mais rápido que AlvoComum",
@@ -47,8 +60,8 @@ public class AlvoTest {
     @Test
     public void testPolimorfismoMover() {
         // Criar ambos os tipos como referência Alvo (polimorfismo)
-        Alvo comum = new AlvoComum(400, 300, 20, 5, LARGURA, ALTURA);
-        Alvo rapido = new AlvoRapido(400, 300, 20, 5, LARGURA, ALTURA);
+        Alvo comum = new AlvoComum(400, 300, 20, 5, LARGURA, ALTURA, canhoes, collisionLock);
+        Alvo rapido = new AlvoRapido(400, 300, 20, 5, LARGURA, ALTURA, canhoes, collisionLock);
 
         float xInicialComum = comum.getX();
         float xInicialRapido = rapido.getX();
@@ -99,7 +112,7 @@ public class AlvoTest {
 
     @Test
     public void testDesativarAlvo() {
-        AlvoComum alvo = new AlvoComum(100, 100, 20, 5, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(100, 100, 20, 5, LARGURA, ALTURA, canhoes, collisionLock);
         assertTrue(alvo.isAtivo());
 
         alvo.setAtivo(false);
@@ -108,7 +121,7 @@ public class AlvoTest {
 
     @Test
     public void testAlvoEhThread() {
-        AlvoComum alvo = new AlvoComum(100, 100, 20, 5, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(100, 100, 20, 5, LARGURA, ALTURA, canhoes, collisionLock);
         assertTrue("Alvo deve ser uma Thread", alvo instanceof Thread);
     }
 }

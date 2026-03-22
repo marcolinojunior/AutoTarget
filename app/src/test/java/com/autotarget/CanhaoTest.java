@@ -2,7 +2,6 @@ package com.autotarget;
 
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
-import com.autotarget.model.AlvoRapido;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.model.Projetil;
@@ -10,6 +9,7 @@ import com.autotarget.model.Projetil;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -23,14 +23,16 @@ import static org.junit.Assert.*;
  */
 public class CanhaoTest {
 
-    private CopyOnWriteArrayList<Alvo> alvos;
+    private List<Alvo> alvos;
+    private List<Canhao> canhoes;
     private Object collisionLock;
     private static final int LARGURA = 800;
     private static final int ALTURA = 600;
 
     @Before
     public void setUp() {
-        alvos = new CopyOnWriteArrayList<>();
+        alvos = new ArrayList<>();
+        canhoes = new ArrayList<>();
         collisionLock = new Object();
     }
 
@@ -69,7 +71,7 @@ public class CanhaoTest {
     @Test
     public void testDisparoComAlvoMesmoLado() {
         // Alvo no lado esquerdo (x=200 < 400=metade)
-        AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
         // Canhão no lado esquerdo
@@ -89,7 +91,7 @@ public class CanhaoTest {
     @Test
     public void testDisparoIgnoraAlvoOutroLado() {
         // Alvo no lado DIREITO (x=600 > 400=metade)
-        AlvoComum alvo = new AlvoComum(600, 200, 20, 3, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(600, 200, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
         // Canhão no lado ESQUERDO
@@ -103,7 +105,7 @@ public class CanhaoTest {
 
     @Test
     public void testPararCanhao() {
-        AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
