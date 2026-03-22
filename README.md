@@ -14,7 +14,7 @@ O ambiente de simulação opera em tempo real e lida com múltiplos objetos calc
 
 ## Status Atual (Foco na AV1)
 
-A primeira avaliação do projeto (AV1) foi **concluída com sucesso**. O foco central até o momento foi o desenvolvimento de um motor puramente multithread do zero, priorizando sólidas bases em engenharia de software e concorrência:
+A primeira avaliação do projeto (AV1) está em **andamento**. O foco central até o momento foi o desenvolvimento de um motor puramente multithread do zero, priorizando sólidas bases em engenharia de software e concorrência:
 
 *   **Programação Orientada a Objetos:** Uso ostensivo de herança e polimorfismo, aplicados especialmente à modelagem dos diferentes comportamentos dos Alvos.
 *   **Controle Manual e Rigoroso de Concorrência:** Para aprofundar o aprendizado em paralelismo, abolimos as coleções embutidas thread-safe. A sincronização de recursos compartilhados no jogo e a prevenção de falhas — como *Race Conditions* e `ConcurrentModificationException` — foram codificadas totalmente do zero, na mão, com intensa utilização de blocos `synchronized` e monitores.
