@@ -83,8 +83,7 @@ public class Canhao extends Thread {
 
         Projetil projetil = new Projetil(
                 this.x, this.y, dirX, dirY,
-                VELOCIDADE_PROJETIL, alvos, collisionLock,
-                larguraTela, alturaTela
+                VELOCIDADE_PROJETIL, larguraTela, alturaTela
         );
         
         synchronized (projeteis) { // CORREÇÃO 1: Adição protegida na lista de projéteis

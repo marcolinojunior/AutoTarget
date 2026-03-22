@@ -1,5 +1,7 @@
 package com.autotarget.model;
 
+import java.util.List;
+
 /**
  * Alvo comum com movimento linear padrão.
  * <p>
@@ -19,8 +21,8 @@ public class AlvoComum extends Alvo {
      * @param alturaTela  altura do canvas
      */
     public AlvoComum(float x, float y, float raio, float velocidade,
-                     int larguraTela, int alturaTela) {
-        super(x, y, raio, velocidade, larguraTela, alturaTela);
+                     int larguraTela, int alturaTela, List<Canhao> canhoes, Object collisionLock) {
+        super(x, y, raio, velocidade, larguraTela, alturaTela, canhoes, collisionLock);
     }
 
     /**

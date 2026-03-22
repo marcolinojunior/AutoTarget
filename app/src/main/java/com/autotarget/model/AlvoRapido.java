@@ -1,5 +1,7 @@
 package com.autotarget.model;
 
+import java.util.List;
+
 /**
  * Alvo rápido com movimento acelerado e mudanças de direção mais frequentes.
  * <p>
@@ -26,8 +28,8 @@ public class AlvoRapido extends Alvo {
      * @param alturaTela  altura do canvas
      */
     public AlvoRapido(float x, float y, float raio, float velocidade,
-                      int larguraTela, int alturaTela) {
-        super(x, y, raio, velocidade, larguraTela, alturaTela);
+                      int larguraTela, int alturaTela, List<Canhao> canhoes, Object collisionLock) {
+        super(x, y, raio, velocidade, larguraTela, alturaTela, canhoes, collisionLock);
     }
 
     /**

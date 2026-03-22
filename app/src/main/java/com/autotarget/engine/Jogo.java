@@ -325,9 +325,9 @@ public class Jogo {
 
         Alvo alvo;
         if (random.nextBoolean()) {
-            alvo = new AlvoComum(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
+            alvo = new AlvoComum(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela, canhoes, collisionLock);
         } else {
-            alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
+            alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela, canhoes, collisionLock);
         }
 
         synchronized (collisionLock) { // CORREÇÃO 1: Sincronização explícita na adição da lista de alvos
