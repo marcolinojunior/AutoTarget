@@ -43,11 +43,16 @@ public class Jogo {
     private volatile Estado estado;
 
     /** Lista global de alvos (alvos se movem livremente pela tela). */
+    // Concorrência: A lista de alvos agora é um ArrayList padrão. Todas as leituras e escritas
+    // concorrentes nesta lista devem ser protegidas pelo collisionLock para evitar problemas.
     private final ArrayList<Alvo> alvos; // CORREÇÃO 1: Troca para ArrayList padrão
 
     /** Lista global de canhões (cada um tem seu Lado). */
+    // Concorrência: ArrayList de canhões. Protegido nos métodos de adição/leitura usando blocos 'synchronized (canhoes)'.
     private final ArrayList<Canhao> canhoes; // CORREÇÃO 1: Troca para ArrayList padrão
 
+    // Concorrência: Objeto monitor ("trava" central) criado para garantir que apenas
+    // uma Thread por vez possa iterar ou modificar a lista de alvos, evitando Race Conditions na colisão e pontuação.
     private final Object collisionLock = new Object();
 
     private volatile int pontuacaoEsquerdo;
@@ -154,6 +159,8 @@ public class Jogo {
         }, 1000, 1000);
 
         // CORREÇÃO 3: Lógica de Negócio removida da View e movida para Timer dedicado (Rodando a ~60 FPS)
+        // Arquitetura: physicsTimer atua como o nosso Game Loop dedicado para a física e colisões.
+        // Ele roda independente do RenderThread da UI. Isso separa a Lógica de Negócio (Engine) da Lógica de Apresentação (View).
         physicsTimer = new Timer("PhysicsTimer", true);
         physicsTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
@@ -368,6 +375,8 @@ public class Jogo {
         // CORREÇÃO 2: Race Condition na Pontuação resolvida.
         // Toda a lógica (verificação, marcação de pontos e remoção da lista)
         // Ocorre de forma ATÔMICA dentro da região crítica.
+        // Concorrência: O uso do synchronized(collisionLock) garante que a checagem de destruição,
+        // a atribuição de pontuação e a remoção segura (iterator.remove()) ocorram sem interferência de outras threads.
         synchronized (collisionLock) {
             java.util.Iterator<Alvo> iterator = alvos.iterator();
             while (iterator.hasNext()) {

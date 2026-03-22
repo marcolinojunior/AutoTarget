@@ -6,6 +6,8 @@ import java.util.ArrayList; // CORREÇÃO 1: Uso de ArrayList padrão
 /**
  * Canhão autônomo que opera em sua própria thread.
  */
+// Concorrência: A classe estende Thread pois cada Canhão funciona como uma "torreta autônoma".
+// Ele toma suas próprias decisões de disparo em paralelo, sem bloquear o restante do jogo.
 public class Canhao extends Thread {
 
     private float x;
@@ -60,6 +62,8 @@ public class Canhao extends Thread {
             try {
                 disparar();
                 limparProjetisInativos();
+                // Concorrência: Pausa a Thread de acordo com o cooldown (intervaloDisparo) do canhão.
+                // É a forma natural de controlar a cadência de tiro através de concorrência.
                 Thread.sleep(intervaloDisparo);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -101,6 +105,9 @@ public class Canhao extends Thread {
                 VELOCIDADE_PROJETIL, larguraTela, alturaTela
         );
         
+        // Concorrência: A lista de projéteis é modificada aqui pela Thread do Canhão,
+        // mas também é iterada no Game Loop (para renderização e colisões).
+        // Usamos synchronized(projeteis) para garantir acesso exclusivo e evitar Race Conditions.
         synchronized (projeteis) { // CORREÇÃO 1: Adição protegida na lista de projéteis
             projeteis.add(projetil);
         }
@@ -113,6 +120,8 @@ public class Canhao extends Thread {
 
         // CORREÇÃO 4: Região Crítica (Proteção na leitura da lista de alvos)
         // Previne ConcurrentModificationException pois a lista agora é um ArrayList
+        // Concorrência: Esta é uma Região Crítica protegida por collisionLock. O Canhão precisa iterar a lista de alvos para mirar.
+        // Sem essa trava, uma Thread do Jogo poderia deletar um alvo enquanto este canhão estivesse lendo a lista, causando erro (Race Condition).
         synchronized (collisionLock) { 
             for (Alvo alvo : alvos) {
                 if (!alvo.isAtivo()) continue;
@@ -131,6 +140,8 @@ public class Canhao extends Thread {
     }
 
     private void limparProjetisInativos() {
+        // Concorrência: Como a remoção altera a estrutura da lista, travamos a lista toda
+        // para que ninguém tente desenhar projéteis que estão sendo deletados.
         synchronized (projeteis) { // CORREÇÃO 1: Sincronização manual correta na remoção
             projeteis.removeIf(p -> !p.isAtivo());
         }

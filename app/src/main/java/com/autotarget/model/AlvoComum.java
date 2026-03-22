@@ -8,6 +8,8 @@ import java.util.List;
  * Desloca-se em linha reta, mudando de direção ao colidir com
  * as bordas da tela. Velocidade base sem multiplicador.
  */
+// OOP: Herança clara, onde AlvoComum herda de Alvo (extends Alvo),
+// aproveitando toda a lógica comum (atributos, loop da Thread, limites, etc).
 public class AlvoComum extends Alvo {
 
     /**
@@ -30,6 +32,8 @@ public class AlvoComum extends Alvo {
     /**
      * Movimento linear simples: desloca x e y pela direção * velocidade.
      */
+    // OOP: Aqui vemos o Polimorfismo em ação. A classe sobrescreve (Override)
+    // o método abstrato da classe mãe com o seu comportamento de movimento linear.
     @Override
     public void mover() {
         this.x += direcaoX * velocidade;

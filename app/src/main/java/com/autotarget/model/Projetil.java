@@ -5,6 +5,8 @@ import java.util.List;
 /**
  * Projétil disparado por um canhão.
  */
+// Concorrência: Assim como os alvos e canhões, cada Projétil é uma Thread.
+// Isso permite que centenas de projéteis se movam ao mesmo tempo de forma assíncrona.
 public class Projetil extends Thread {
 
     private float x;
@@ -53,6 +55,8 @@ public class Projetil extends Thread {
                     break;
                 }
                 // REGRA 4: Projétil apenas anda em linha reta (a colisão agora é responsabilidade do Alvo)
+                // Concorrência: Pausa a Thread do projétil por INTERVALO_ATUALIZACAO milissegundos (~60 vezes por segundo).
+                // Evita que o projétil "teleporte" e libera a CPU para outras Threads (como a UI e os outros projéteis).
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

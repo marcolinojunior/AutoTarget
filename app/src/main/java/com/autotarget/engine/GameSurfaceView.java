@@ -262,6 +262,8 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
         // CORREÇÃO 3: Lógica de negócio (física) movida para timer dedicado no Jogo.java
         // REMOVIDA A CHAMADA jogo.verificarColisoes() DESTE MÉTODO DE DESENHO (RENDER THREAD)
+        // Arquitetura: Essa remoção foi a chave para corrigir o problema de performance e arquitetura.
+        // O método de desenho agora é "burro": ele apenas lê o estado atual e desenha, ele não processa colisões mais.
 
         if (jogo.getEstado() == Jogo.Estado.ENCERRADO) {
             desenharTelaFim(canvas);
@@ -402,6 +404,9 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         return glow;
     }
 
+    // Arquitetura: RenderThread é dedicada exclusivamente para a Lógica de Desenho (UI Thread).
+    // Concorrência: A separação do loop de renderização (aqui) do Game Loop de física (physicsTimer no Jogo.java)
+    // permite desenhar a ~30 FPS com os dados mais recentes do jogo, sem o risco de a renderização deixar a lógica de negócio lenta.
     private class RenderThread extends Thread {
         private final SurfaceHolder holder;
         private volatile boolean running;
