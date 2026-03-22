@@ -11,4 +11,18 @@
     <string name="alvos_ativos_inicial">Alvos: 0</string>
     <string name="tempo_inicial">⏱ 01:00</string>
     <string name="energia_inicial">⚡E:100 | D:100</string>
+
+    <!-- Strings do GameSurfaceView -->
+    <string name="lado_esquerdo">ESQUERDO</string>
+    <string name="lado_direito">DIREITO</string>
+    <string name="fim_de_jogo">FIM DE JOGO</string>
+    <string name="resultado_esquerdo">Esquerdo: </string>
+    <string name="resultado_direito">Direito: </string>
+    <string name="vitoria_esquerdo">🏆 Esquerdo Vence!</string>
+    <string name="vitoria_direito">🏆 Direito Vence!</string>
+    <string name="empate">🤝 Empate!</string>
+    <string name="reiniciar_jogo">Toque em Iniciar para jogar novamente</string>
+
+    <string name="hud_score_esq">⚡%1$d  Pts:%2$d</string>
+    <string name="hud_score_dir">Pts:%1$d  ⚡%2$d</string>
 </resources>
