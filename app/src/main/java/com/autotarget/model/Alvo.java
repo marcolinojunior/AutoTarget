@@ -1,6 +1,7 @@
 package com.autotarget.model;
 
 import java.util.Random;
+import java.util.List; // ADDED LIST IMPORT
 
 /**
  * Classe abstrata que representa um alvo no jogo AutoTarget.
@@ -43,14 +44,19 @@ public abstract class Alvo extends Thread {
      * @param larguraTela largura máxima do canvas
      * @param alturaTela  altura máxima do canvas
      */
+    protected final List<Canhao> canhoes;
+    protected final Object collisionLock;
+
     public Alvo(float x, float y, float raio, float velocidade,
-                int larguraTela, int alturaTela) {
+                int larguraTela, int alturaTela, List<Canhao> canhoes, Object collisionLock) {
         this.x = x;
         this.y = y;
         this.raio = raio;
         this.velocidade = velocidade;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
+        this.canhoes = canhoes;
+        this.collisionLock = collisionLock;
         this.ativo = true;
 
         // Direção inicial aleatória normalizada
@@ -67,10 +73,33 @@ public abstract class Alvo extends Thread {
             try {
                 mover();
                 verificarLimites();
+                verificarColisoes(); // REGRA 4: Alvo verifica colisão
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 ativo = false;
+            }
+        }
+    }
+
+    private void verificarColisoes() {
+        // REGRA 4: O método run() do Alvo itera sobre a lista de projéteis e verifica colisão
+        synchronized (collisionLock) {
+            if (!this.ativo) return;
+
+            for (Canhao canhao : canhoes) {
+                synchronized (canhao.getProjeteis()) {
+                    java.util.Iterator<Projetil> it = canhao.getProjeteis().iterator();
+                    while (it.hasNext()) {
+                        Projetil p = it.next();
+                        if (p.isAtivo() && p.collide(this)) {
+                            this.ativo = false;
+                            p.setAtivo(false);
+                            it.remove(); // Remove o projétil da lista do canhão
+                            return; // Alvo destruído, encerra verificação
+                        }
+                    }
+                }
             }
         }
     }

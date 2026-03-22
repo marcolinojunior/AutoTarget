@@ -17,22 +17,16 @@ public class Projetil extends Thread {
     private static final float RAIO = 5f;
     private static final int INTERVALO_ATUALIZACAO = 16;
 
-    private final List<Alvo> alvos;
-    private final Object collisionLock;
-
     private final int larguraTela;
     private final int alturaTela;
 
     public Projetil(float x, float y, float direcaoX, float direcaoY,
-                    float velocidade, List<Alvo> alvos, Object collisionLock,
-                    int larguraTela, int alturaTela) {
+                    float velocidade, int larguraTela, int alturaTela) {
         this.x = x;
         this.y = y;
         this.direcaoX = direcaoX;
         this.direcaoY = direcaoY;
         this.velocidade = velocidade;
-        this.alvos = alvos;
-        this.collisionLock = collisionLock;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
         this.ativo = true;
@@ -47,7 +41,7 @@ public class Projetil extends Thread {
                     ativo = false;
                     break;
                 }
-                verificarColisoes();
+                // REGRA 4: Projétil apenas anda em linha reta (a colisão agora é responsabilidade do Alvo)
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -66,23 +60,7 @@ public class Projetil extends Thread {
             || y < -RAIO || y > alturaTela + RAIO;
     }
 
-    /**
-     * Verifica colisão com cada alvo ativo na lista compartilhada.
-     */
-    private void verificarColisoes() {
-        // CORREÇÃO 4: Região crítica explícita usando o collisionLock.
-        // Garante que a leitura da iteração e a exclusão lógicas (ativo=false) ocorram perfeitamente atômicas 
-        // e sem lançar ConcurrentModificationException.
-        synchronized (collisionLock) {
-            for (Alvo alvo : alvos) {
-                if (alvo.isAtivo() && collide(alvo)) {
-                    alvo.setAtivo(false);
-                    this.ativo = false;
-                    break;
-                }
-            }
-        }
-    }
+
 
     public boolean collide(Alvo alvo) {
         float distancia = Alvo.calcularDistancia(this.x, this.y, alvo.getX(), alvo.getY());
