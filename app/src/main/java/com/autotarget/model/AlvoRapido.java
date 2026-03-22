@@ -1,0 +1,57 @@
+package com.autotarget.model;
+
+/**
+ * Alvo rápido com movimento acelerado e mudanças de direção mais frequentes.
+ * <p>
+ * Aplica um multiplicador de 2x na velocidade e, a cada atualização,
+ * possui uma chance de 5% de trocar aleatoriamente de direção,
+ * tornando-o mais difícil de interceptar.
+ */
+public class AlvoRapido extends Alvo {
+
+    /** Multiplicador de velocidade em relação à velocidade base. */
+    private static final float MULTIPLICADOR_VELOCIDADE = 2.0f;
+
+    /** Probabilidade de mudança aleatória de direção (0–1). */
+    private static final float CHANCE_MUDAR_DIRECAO = 0.05f;
+
+    /**
+     * Cria um AlvoRapido.
+     *
+     * @param x           posição X inicial
+     * @param y           posição Y inicial
+     * @param raio        raio do círculo
+     * @param velocidade  velocidade base (será multiplicada internamente)
+     * @param larguraTela largura do canvas
+     * @param alturaTela  altura do canvas
+     */
+    public AlvoRapido(float x, float y, float raio, float velocidade,
+                      int larguraTela, int alturaTela) {
+        super(x, y, raio, velocidade, larguraTela, alturaTela);
+    }
+
+    /**
+     * Movimento rápido: aplica 2x na velocidade e muda de direção
+     * aleatoriamente com 5% de chance a cada frame.
+     */
+    @Override
+    public void mover() {
+        // Mudança aleatória de direção
+        if (random.nextFloat() < CHANCE_MUDAR_DIRECAO) {
+            double angulo = random.nextDouble() * 2 * Math.PI;
+            direcaoX = (float) Math.cos(angulo);
+            direcaoY = (float) Math.sin(angulo);
+        }
+
+        this.x += direcaoX * velocidade * MULTIPLICADOR_VELOCIDADE;
+        this.y += direcaoY * velocidade * MULTIPLICADOR_VELOCIDADE;
+    }
+
+    /**
+     * Retorna a velocidade efetiva (com o multiplicador aplicado).
+     */
+    @Override
+    public float getVelocidade() {
+        return super.getVelocidade() * MULTIPLICADOR_VELOCIDADE;
+    }
+}
