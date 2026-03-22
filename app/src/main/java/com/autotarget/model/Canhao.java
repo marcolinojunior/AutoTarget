@@ -1,62 +1,33 @@
 package com.autotarget.model;
 
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.ArrayList; // CORREÇÃO 1: Uso de ArrayList padrão
 
 /**
  * Canhão autônomo que opera em sua própria thread.
- * <p>
- * Pertence a um {@link Lado} (esquerdo ou direito) e só pode disparar
- * contra alvos que estejam no mesmo lado. Quando o número de canhões
- * do seu lado ultrapassa o limite base, sofre penalidade na taxa de
- * disparo (intervalo entre tiros aumenta).
  */
 public class Canhao extends Thread {
 
-    // ── Atributos ────────────────────────────────────────────────
     private float x;
     private float y;
     private float angulo;
     private volatile boolean ativo;
 
-    /** Lado (campo) ao qual este canhão pertence. */
     private final Lado lado;
 
-    /** Lista thread-safe dos projéteis disparados por este canhão. */
+    /** Lista de projéteis disparados (uso de ArrayList com sincronização manual). */
     private final List<Projetil> projeteis;
 
-    /** Referência à lista compartilhada de alvos (para mirar). */
     private final List<Alvo> alvos;
-
-    /** Lock global para colisão. */
     private final Object collisionLock;
 
-    /** Velocidade dos projéteis disparados. */
     private static final float VELOCIDADE_PROJETIL = 12f;
-
-    /** Intervalo base entre disparos (ms). */
     private static final int INTERVALO_DISPARO_BASE = 1500;
-
-    /** Intervalo de disparo efetivo (pode ter penalidade). */
     private int intervaloDisparo;
 
-    /** Limites da tela. */
     private int larguraTela;
     private int alturaTela;
 
-    // ── Construtor ───────────────────────────────────────────────
-
-    /**
-     * Cria um canhão em uma posição fixa, pertencente a um lado.
-     *
-     * @param x             posição X
-     * @param y             posição Y
-     * @param lado          lado (ESQUERDO ou DIREITO)
-     * @param alvos         lista compartilhada de alvos
-     * @param collisionLock lock para região crítica de colisão
-     * @param larguraTela   largura do canvas
-     * @param alturaTela    altura do canvas
-     */
     public Canhao(float x, float y, Lado lado, List<Alvo> alvos,
                   Object collisionLock, int larguraTela, int alturaTela) {
         this.x = x;
@@ -68,11 +39,9 @@ public class Canhao extends Thread {
         this.collisionLock = collisionLock;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
-        this.projeteis = new CopyOnWriteArrayList<>();
+        this.projeteis = new ArrayList<>(); // CORREÇÃO 1: Instanciando ArrayList padrão
         this.intervaloDisparo = INTERVALO_DISPARO_BASE;
     }
-
-    // ── Thread ───────────────────────────────────────────────────
 
     @Override
     public void run() {
@@ -88,12 +57,6 @@ public class Canhao extends Thread {
         }
     }
 
-    // ── Disparo ──────────────────────────────────────────────────
-
-    /**
-     * Dispara um projétil em direção ao alvo ativo mais próximo
-     * que esteja no MESMO LADO deste canhão.
-     */
     public void disparar() {
         Alvo alvoMaisProximo = encontrarAlvoMaisProximoNoMesmoLado();
         if (alvoMaisProximo == null) {
@@ -123,56 +86,42 @@ public class Canhao extends Thread {
                 VELOCIDADE_PROJETIL, alvos, collisionLock,
                 larguraTela, alturaTela
         );
-        synchronized (projeteis) {
+        
+        synchronized (projeteis) { // CORREÇÃO 1: Adição protegida na lista de projéteis
             projeteis.add(projetil);
         }
         projetil.start();
     }
 
-    /**
-     * Encontra o alvo ativo mais próximo que esteja no MESMO LADO.
-     * Alvos são filtrados pela posição X relativa à linha divisória.
-     *
-     * @return o alvo mais próximo no mesmo lado, ou null se nenhum
-     */
     private Alvo encontrarAlvoMaisProximoNoMesmoLado() {
         Alvo maisProximo = null;
         float menorDistancia = Float.MAX_VALUE;
 
-        for (Alvo alvo : alvos) {
-            if (!alvo.isAtivo()) continue;
+        // CORREÇÃO 4: Região Crítica (Proteção na leitura da lista de alvos)
+        // Previne ConcurrentModificationException pois a lista agora é um ArrayList
+        synchronized (collisionLock) { 
+            for (Alvo alvo : alvos) {
+                if (!alvo.isAtivo()) continue;
+                Lado ladoAlvo = Lado.determinar(alvo.getX(), larguraTela);
+                if (ladoAlvo != this.lado) continue;
 
-            // Só mira em alvos do MESMO LADO
-            Lado ladoAlvo = Lado.determinar(alvo.getX(), larguraTela);
-            if (ladoAlvo != this.lado) continue;
-
-            float dist = Alvo.calcularDistancia(this.x, this.y,
-                    alvo.getX(), alvo.getY());
-            if (dist < menorDistancia) {
-                menorDistancia = dist;
-                maisProximo = alvo;
+                float dist = Alvo.calcularDistancia(this.x, this.y,
+                        alvo.getX(), alvo.getY());
+                if (dist < menorDistancia) {
+                    menorDistancia = dist;
+                    maisProximo = alvo;
+                }
             }
         }
         return maisProximo;
     }
 
-    /**
-     * Remove projéteis inativos da lista para liberar memória.
-     */
     private void limparProjetisInativos() {
-        synchronized (projeteis) {
+        synchronized (projeteis) { // CORREÇÃO 1: Sincronização manual correta na remoção
             projeteis.removeIf(p -> !p.isAtivo());
         }
     }
 
-    // ── Penalidade ───────────────────────────────────────────────
-
-    /**
-     * Aplica penalidade na taxa de disparo.
-     * Canhões além do limiar base têm intervalo de disparo aumentado.
-     *
-     * @param penalidade true para aplicar penalidade (2x intervalo)
-     */
     public void aplicarPenalidade(boolean penalidade) {
         if (penalidade) {
             this.intervaloDisparo = INTERVALO_DISPARO_BASE * 2;
@@ -181,22 +130,15 @@ public class Canhao extends Thread {
         }
     }
 
-    // ── Controle ─────────────────────────────────────────────────
-
-    /**
-     * Para o canhão e todos os seus projéteis.
-     */
     public void pararCanhao() {
         this.ativo = false;
-        synchronized (projeteis) {
+        synchronized (projeteis) { // CORREÇÃO 1: Sincronização manual na iteração de parada
             for (Projetil p : projeteis) {
                 p.setAtivo(false);
                 p.interrupt();
             }
         }
     }
-
-    // ── Getters ──────────────────────────────────────────────────
 
     public float getX() { return x; }
     public float getY() { return y; }
