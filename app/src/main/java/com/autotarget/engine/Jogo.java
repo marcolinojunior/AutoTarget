@@ -18,30 +18,18 @@ import java.util.List;
 import java.util.Random;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.ArrayList; // CORREÇÃO 1: Uso de ArrayList padrão ao invés de CopyOnWriteArrayList
 
 /**
  * Controlador central do jogo AutoTarget.
- * <p>
- * <b>Cenário (seção 4.2):</b>
- * A tela é dividida verticalmente em duas áreas (campo esquerdo e direito).
- * Cada área possui seu próprio conjunto de canhões e orçamento de energia.
- * Alvos surgem em posições aleatórias e pertencem ao lado onde estão;
- * ao cruzar a linha divisória, passam a pertencer ao outro lado.
- * Canhões só podem abater alvos do seu lado.
- * Canhões acima do limiar sofrem penalidade na taxa de disparo.
  */
 public class Jogo {
-
-    // ── Enumeração de estados ────────────────────────────────────
 
     public enum Estado {
         PARADO,
         RODANDO,
         ENCERRADO
     }
-
-    // ── Constantes ───────────────────────────────────────────────
 
     private static final int MAX_CANHOES_POR_LADO = 10;
     private static final int LIMIAR_PENALIDADE = 5;
@@ -52,23 +40,18 @@ public class Jogo {
     private static final float ENERGIA_MAXIMA = 100f;
     private static final float CUSTO_ENERGIA_POR_CANHAO = 5f;
 
-    // ── Atributos ────────────────────────────────────────────────
-
     private volatile Estado estado;
 
     /** Lista global de alvos (alvos se movem livremente pela tela). */
-    private final CopyOnWriteArrayList<Alvo> alvos;
+    private final ArrayList<Alvo> alvos; // CORREÇÃO 1: Troca para ArrayList padrão
 
     /** Lista global de canhões (cada um tem seu Lado). */
-    private final CopyOnWriteArrayList<Canhao> canhoes;
+    private final ArrayList<Canhao> canhoes; // CORREÇÃO 1: Troca para ArrayList padrão
 
     private final Object collisionLock = new Object();
 
-    /** Pontuação de cada lado. */
     private volatile int pontuacaoEsquerdo;
     private volatile int pontuacaoDireito;
-
-    /** Energia de cada lado. */
     private volatile float energiaEsquerdo;
     private volatile float energiaDireito;
 
@@ -79,10 +62,10 @@ public class Jogo {
 
     private Timer spawnTimer;
     private Timer gameTimer;
+    private Timer physicsTimer; // CORREÇÃO 3: Timer dedicado para a lógica de negócio (física e colisões)
 
     private final Random random = new Random();
 
-    // ── Threads da arquitetura ────────────────────────────────────
     private SensorThread sensorThread;
     private ReconciliacaoThread reconciliacaoThread;
     private FirebaseIOThread firebaseIOThread;
@@ -95,8 +78,6 @@ public class Jogo {
 
     private OnJogoListener listener;
 
-    // ── Interface de callback ────────────────────────────────────
-
     public interface OnJogoListener {
         void onPontuacaoAtualizada(int pontuacaoEsq, int pontuacaoDir);
         void onEstadoAlterado(Estado estado);
@@ -107,11 +88,9 @@ public class Jogo {
                                 int reconciliacoes, Lado vencedor);
     }
 
-    // ── Construtor ───────────────────────────────────────────────
-
     public Jogo() {
-        this.alvos = new CopyOnWriteArrayList<>();
-        this.canhoes = new CopyOnWriteArrayList<>();
+        this.alvos = new ArrayList<>(); // CORREÇÃO 1
+        this.canhoes = new ArrayList<>(); // CORREÇÃO 1
         this.estado = Estado.PARADO;
         this.pontuacaoEsquerdo = 0;
         this.pontuacaoDireito = 0;
@@ -123,8 +102,6 @@ public class Jogo {
         this.firestoreRepository = new FirestoreRepository();
         this.cryptography = new Cryptography();
     }
-
-    // ── Controle do jogo ─────────────────────────────────────────
 
     public synchronized void iniciar() throws JogoException {
         if (estado == Estado.RODANDO) {
@@ -140,7 +117,6 @@ public class Jogo {
         reconciliacoesRealizadas = 0;
         timestampInicio = System.currentTimeMillis();
 
-        // Timer de spawn de alvos
         spawnTimer = new Timer("SpawnAlvoTimer", true);
         spawnTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
@@ -149,11 +125,9 @@ public class Jogo {
             }
         }, 0, INTERVALO_SPAWN_ALVO);
 
-        // Timer principal: contagem regressiva + energia
         gameTimer = new Timer("GameTimer", true);
         gameTimer.scheduleAtFixedRate(new TimerTask() {
             private int segundosDecorridos = 0;
-
             @Override
             public void run() {
                 if (estado != Estado.RODANDO) return;
@@ -169,11 +143,18 @@ public class Jogo {
             }
         }, 1000, 1000);
 
-        // Thread Sensores/Coleta
+        // CORREÇÃO 3: Lógica de Negócio removida da View e movida para Timer dedicado (Rodando a ~60 FPS)
+        physicsTimer = new Timer("PhysicsTimer", true);
+        physicsTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (estado == Estado.RODANDO) verificarColisoes();
+            }
+        }, 0, 16); 
+
         sensorThread = new SensorThread(alvos, sensorLock);
         sensorThread.start();
 
-        // Thread Reconciliação+Otimização
         reconciliacaoThread = new ReconciliacaoThread(
                 dataReconciliation, sensorThread, alvos, sensorLock);
         reconciliacaoThread.setListener(totalRec -> {
@@ -184,13 +165,13 @@ public class Jogo {
         });
         reconciliacaoThread.start();
 
-        // Thread Firebase I/O
         firebaseIOThread = new FirebaseIOThread(firestoreRepository, cryptography);
         firebaseIOThread.start();
 
-        // Iniciar threads dos canhões existentes
-        for (Canhao c : canhoes) {
-            if (!c.isAlive()) c.start();
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita
+            for (Canhao c : canhoes) {
+                if (!c.isAlive()) c.start();
+            }
         }
 
         notificarEstado();
@@ -216,17 +197,15 @@ public class Jogo {
 
         long tempoTotal = (System.currentTimeMillis() - timestampInicio) / 1000;
 
-        // Determinar vencedor
         Lado vencedor;
         if (pontuacaoEsquerdo > pontuacaoDireito) {
             vencedor = Lado.ESQUERDO;
         } else if (pontuacaoDireito > pontuacaoEsquerdo) {
             vencedor = Lado.DIREITO;
         } else {
-            vencedor = null; // Empate
+            vencedor = null;
         }
 
-        // Salvar via Thread Firebase I/O
         if (firebaseIOThread != null && firebaseIOThread.isAlive()) {
             String dados = "esquerdo=" + pontuacaoEsquerdo
                     + ";direito=" + pontuacaoDireito
@@ -244,20 +223,19 @@ public class Jogo {
         }
     }
 
-    // ── Sistema de energia (por lado) ────────────────────────────
-
     private void atualizarEnergia() {
         int canhoesEsq = 0, canhoesDir = 0;
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) canhoesEsq++;
-            else canhoesDir++;
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita na iteração
+            for (Canhao c : canhoes) {
+                if (!c.isAtivo()) continue;
+                if (c.getLado() == Lado.ESQUERDO) canhoesEsq++;
+                else canhoesDir++;
+            }
         }
 
         energiaEsquerdo = Math.max(0f, energiaEsquerdo - canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
         energiaDireito = Math.max(0f, energiaDireito - canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
 
-        // Se energia de um lado acabou, desativar último canhão desse lado
         if (energiaEsquerdo <= 0f && canhoesEsq > 0) {
             desativarUltimoCanhao(Lado.ESQUERDO);
             energiaEsquerdo = 0f;
@@ -269,58 +247,48 @@ public class Jogo {
     }
 
     private void desativarUltimoCanhao(Lado lado) {
-        for (int i = canhoes.size() - 1; i >= 0; i--) {
-            Canhao c = canhoes.get(i);
-            if (c.isAtivo() && c.getLado() == lado) {
-                c.pararCanhao();
-                break;
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita na iteração
+            for (int i = canhoes.size() - 1; i >= 0; i--) {
+                Canhao c = canhoes.get(i);
+                if (c.isAtivo() && c.getLado() == lado) {
+                    c.pararCanhao();
+                    break;
+                }
             }
         }
     }
 
-    // ── Penalidade de canhões ────────────────────────────────────
-
-    /**
-     * Aplica ou remove penalidade nos canhões acima do limiar por lado.
-     * Canhões além de LIMIAR_PENALIDADE no mesmo lado têm taxa de disparo 2x.
-     */
     private void aplicarPenalidades() {
         int contEsq = 0, contDir = 0;
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) contEsq++;
-            else contDir++;
-        }
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita na iteração
+            for (Canhao c : canhoes) {
+                if (!c.isAtivo()) continue;
+                if (c.getLado() == Lado.ESQUERDO) contEsq++;
+                else contDir++;
+            }
 
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) {
-                c.aplicarPenalidade(contEsq > LIMIAR_PENALIDADE);
-            } else {
-                c.aplicarPenalidade(contDir > LIMIAR_PENALIDADE);
+            for (Canhao c : canhoes) {
+                if (!c.isAtivo()) continue;
+                if (c.getLado() == Lado.ESQUERDO) {
+                    c.aplicarPenalidade(contEsq > LIMIAR_PENALIDADE);
+                } else {
+                    c.aplicarPenalidade(contDir > LIMIAR_PENALIDADE);
+                }
             }
         }
     }
 
-    // ── Gerenciamento de entidades ───────────────────────────────
-
-    /**
-     * Adiciona um canhão no lado especificado.
-     *
-     * @param x    posição X
-     * @param y    posição Y
-     * @param lado lado (ESQUERDO ou DIREITO)
-     */
     public void adicionarCanhao(float x, float y, Lado lado) throws JogoException {
         if (x < 0 || x > larguraTela || y < 0 || y > alturaTela) {
             throw new JogoException(
                     "Canhão fora dos limites da tela! Posição: (" + x + ", " + y + ")");
         }
 
-        // Contar canhões do mesmo lado
         int countLado = 0;
-        for (Canhao c : canhoes) {
-            if (c.getLado() == lado) countLado++;
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita na iteração
+            for (Canhao c : canhoes) {
+                if (c.getLado() == lado) countLado++;
+            }
         }
 
         if (countLado >= MAX_CANHOES_POR_LADO) {
@@ -328,7 +296,6 @@ public class Jogo {
                     "Máximo de canhões no lado " + lado + " atingido (" + MAX_CANHOES_POR_LADO + ")!");
         }
 
-        // Verificar energia do lado
         float energiaLado = (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
         if (estado == Estado.RODANDO && energiaLado < CUSTO_ENERGIA_POR_CANHAO) {
             throw new JogoException("Energia insuficiente no lado " + lado + "!");
@@ -337,12 +304,13 @@ public class Jogo {
         Canhao canhao = new Canhao(x, y, lado, alvos, collisionLock,
                 larguraTela, alturaTela);
 
-        // Penalty check
         if (countLado >= LIMIAR_PENALIDADE) {
             canhao.aplicarPenalidade(true);
         }
 
-        canhoes.add(canhao);
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita na adição
+            canhoes.add(canhao);
+        }
 
         if (estado == Estado.RODANDO) {
             canhao.start();
@@ -362,27 +330,27 @@ public class Jogo {
             alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
         }
 
-        alvos.add(alvo);
+        synchronized (collisionLock) { // CORREÇÃO 1: Sincronização explícita na adição da lista de alvos
+            alvos.add(alvo);
+        }
         alvo.start();
     }
 
-    // ── Verificação de colisões (por lado) ───────────────────────
-
     /**
      * Verifica colisões e atribui pontos ao lado correto.
-     * A pontuação vai para o lado onde o alvo estava quando foi destruído.
      */
     public int verificarColisoes() {
         int destruidos = 0;
-        synchronized (collisionLock) {
-            for (Alvo alvo : alvos) {
-                if (!alvo.isAtivo()) destruidos++;
-            }
-        }
 
-        if (destruidos > 0) {
-            for (Alvo alvo : alvos) {
+        // CORREÇÃO 2: Race Condition na Pontuação resolvida.
+        // Toda a lógica (verificação, marcação de pontos e remoção da lista)
+        // Ocorre de forma ATÔMICA dentro da região crítica.
+        synchronized (collisionLock) {
+            java.util.Iterator<Alvo> iterator = alvos.iterator();
+            while (iterator.hasNext()) {
+                Alvo alvo = iterator.next();
                 if (!alvo.isAtivo()) {
+                    destruidos++;
                     // Ponto para o lado onde o alvo estava
                     Lado ladoAlvo = Lado.determinar(alvo.getX(), larguraTela);
                     if (ladoAlvo == Lado.ESQUERDO) {
@@ -390,9 +358,12 @@ public class Jogo {
                     } else {
                         pontuacaoDireito++;
                     }
-                    alvos.remove(alvo);
+                    iterator.remove(); // Remoção segura usando iterator nativo do ArrayList
                 }
             }
+        }
+
+        if (destruidos > 0) {
             notificarPontuacao();
         }
 
@@ -400,16 +371,19 @@ public class Jogo {
         return destruidos;
     }
 
-    // ── Helpers ──────────────────────────────────────────────────
-
     private void pararTimers() {
         if (spawnTimer != null) { spawnTimer.cancel(); spawnTimer = null; }
         if (gameTimer != null) { gameTimer.cancel(); gameTimer = null; }
+        if (physicsTimer != null) { physicsTimer.cancel(); physicsTimer = null; }
     }
 
     private void pararTodasThreads() {
-        for (Alvo a : alvos) { a.setAtivo(false); a.interrupt(); }
-        for (Canhao c : canhoes) { c.pararCanhao(); c.interrupt(); }
+        synchronized (collisionLock) { // CORREÇÃO 1: Sincronização explícita
+            for (Alvo a : alvos) { a.setAtivo(false); a.interrupt(); }
+        }
+        synchronized (canhoes) { // CORREÇÃO 1: Sincronização explícita
+            for (Canhao c : canhoes) { c.pararCanhao(); c.interrupt(); }
+        }
         if (sensorThread != null) { sensorThread.setAtivo(false); sensorThread.interrupt(); }
         if (reconciliacaoThread != null) { reconciliacaoThread.setAtivo(false); reconciliacaoThread.interrupt(); }
         if (firebaseIOThread != null) {
@@ -420,8 +394,6 @@ public class Jogo {
             }, "FirebaseShutdown").start();
         }
     }
-
-    // ── Notificações ─────────────────────────────────────────────
 
     private void notificarPontuacao() {
         if (listener != null) listener.onPontuacaoAtualizada(pontuacaoEsquerdo, pontuacaoDireito);
@@ -434,7 +406,9 @@ public class Jogo {
     private void notificarAlvosAtivos() {
         if (listener != null) {
             int ativos = 0;
-            for (Alvo a : alvos) { if (a.isAtivo()) ativos++; }
+            synchronized (collisionLock) { // CORREÇÃO 1
+                for (Alvo a : alvos) { if (a.isAtivo()) ativos++; }
+            }
             listener.onAlvosAtivosAtualizado(ativos);
         }
     }
@@ -446,8 +420,6 @@ public class Jogo {
     private void notificarEnergia() {
         if (listener != null) listener.onEnergiaAtualizada(energiaEsquerdo, energiaDireito);
     }
-
-    // ── Getters / Setters ────────────────────────────────────────
 
     public Estado getEstado() { return estado; }
     public int getPontuacaoEsquerdo() { return pontuacaoEsquerdo; }
