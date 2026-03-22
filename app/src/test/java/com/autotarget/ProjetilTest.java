@@ -16,8 +16,8 @@ import static org.junit.Assert.*;
 /**
  * Testes unitários para a classe {@link Projetil}.
  * <p>
- * Verifica cálculo de distância, detecção de colisão, movimento
- * e validação de posição.
+ * Verifica cálculo de distância, detecção de colisão (cenários normais e
+ * casos de borda), movimento linear e diagonal, e validação de estado.
  */
 public class ProjetilTest {
 
@@ -53,10 +53,12 @@ public class ProjetilTest {
 
     @Test
     public void testColisaoDetectada() {
+        // Como o teste é feito: Projétil e Alvo na mesma posição (sobreposição total).
+        // Condição de Pass: collide() retorna true (distância 0 <= soma dos raios).
+        // Condição de Not Pass: collide() retorna false incorretamente.
         AlvoComum alvo = new AlvoComum(100, 100, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
-        // Projétil na mesma posição do alvo → colisão
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
                 LARGURA, ALTURA);
 
@@ -65,10 +67,12 @@ public class ProjetilTest {
 
     @Test
     public void testColisaoNaoDetectadaDistante() {
+        // Como o teste é feito: Projétil muito longe do alvo.
+        // Condição de Pass: collide() retorna false (distância >> soma dos raios).
+        // Condição de Not Pass: collide() retorna true incorretamente.
         AlvoComum alvo = new AlvoComum(500, 500, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
-        // Projétil muito longe → sem colisão
         Projetil projetil = new Projetil(10, 10, 1, 0, 10,
                 LARGURA, ALTURA);
 
@@ -77,18 +81,31 @@ public class ProjetilTest {
 
     @Test
     public void testColisaoNaFronteiraDaDistancia() {
-        // Alvo com raio 20 na posição (100, 100)
+        // Como o teste é feito: Projétil (raio=5) posicionado exatamente na distância = raioAlvo + raioProjetil = 25.
+        // Este é o CASO DE BORDA onde a distância é estritamente igual à soma dos raios.
+        // Condição de Pass: collide() retorna true (distância <= soma dos raios, com igualdade).
+        // Condição de Not Pass: collide() retorna false, indicando que a condição usa < em vez de <=.
         AlvoComum alvo = new AlvoComum(100, 100, 20, 3, LARGURA, ALTURA, canhoes, collisionLock);
         alvos.add(alvo);
 
-        // Projétil (raio 5) exatamente no limite: distância = raioAlvo + raioProjetil = 25
         float distanciaLimite = 20f + Projetil.getRaio(); // 25
         Projetil projetilLimite = new Projetil(100 + distanciaLimite, 100, 1, 0, 10,
                 LARGURA, ALTURA);
 
-        // Colisão exata na fronteira
-        assertTrue("Deveria detectar colisão no limite",
+        assertTrue("Deveria detectar colisão no limite exato (borda tocando borda)",
                 projetilLimite.collide(alvo));
+    }
+
+    @Test
+    public void testColisaoNaFronteiraDaDistanciaEixoY() {
+        // Como o teste é feito: Mesmo caso de borda, mas no eixo Y em vez de X.
+        // Condição de Pass: collide() retorna true para toque exato na borda vertical.
+        // Condição de Not Pass: Falha se a detecção depender do eixo.
+        AlvoComum alvo = new AlvoComum(100, 100, 30, 3, LARGURA, ALTURA, canhoes, collisionLock);
+
+        float somaRaios = 30f + Projetil.getRaio(); // 35
+        Projetil projetil = new Projetil(100, 100 + somaRaios, 1, 0, 10, LARGURA, ALTURA);
+        assertTrue("Colisão na borda inferior deve ser detectada", projetil.collide(alvo));
     }
 
     // ── Testes de movimento ──────────────────────────────────────

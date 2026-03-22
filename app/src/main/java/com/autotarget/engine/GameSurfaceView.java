@@ -228,7 +228,9 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         canvas.drawText(getContext().getString(R.string.lado_esquerdo), meioX / 2f, h - 10, labelPaint);
         canvas.drawText(getContext().getString(R.string.lado_direito), meioX + meioX / 2f, h - 10, labelPaint);
 
-        // CORREÇÃO 1: Proteção na iteração dos alvos para renderização
+        // CORREÇÃO 1: Proteção na iteração dos alvos para renderização.
+        // Sem este bloco, SpawnAlvoTimer adicionando alvos ou PhysicsTimer removendo
+        // inativos causariam ConcurrentModificationException durante o desenho.
         synchronized (jogo.getCollisionLock()) {
             for (Alvo alvo : jogo.getAlvos()) {
                 if (!alvo.isAtivo()) continue;
@@ -239,14 +241,18 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
             }
         }
 
-        // CORREÇÃO 1: Proteção na iteração dos canhoes e seus projeteis
+        // CORREÇÃO 1: Proteção na iteração dos canhões e seus projéteis.
+        // A UI Thread pode adicionar canhões via adicionarCanhao() ao mesmo tempo
+        // que a RenderThread itera para desenhar, causando ConcurrentModificationException.
         synchronized (jogo.getCanhoes()) {
             for (Canhao canhao : jogo.getCanhoes()) {
                 if (!canhao.isAtivo()) continue;
                 Paint paintCanhao = (canhao.getLado() == Lado.ESQUERDO) ? paintCanhaoEsq : paintCanhaoDir;
                 desenharCanhao(canvas, canhao, paintCanhao);
 
-                // Proteção na iteração dos projéteis de cada canhão
+                // Lock ordering: canhoes (externo, já adquirido) → projeteis (interno).
+                // Acesso externo à lista de projéteis requer synchronized conforme
+                // documentado em Canhao.getProjeteis().
                 synchronized (canhao.getProjeteis()) {
                     for (Projetil projetil : canhao.getProjeteis()) {
                         if (projetil.isAtivo()) {
@@ -262,6 +268,8 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
         // CORREÇÃO 3: Lógica de negócio (física) movida para timer dedicado no Jogo.java
         // REMOVIDA A CHAMADA jogo.verificarColisoes() DESTE MÉTODO DE DESENHO (RENDER THREAD)
+        // Arquitetura: Essa remoção foi a chave para corrigir o problema de performance e arquitetura.
+        // O método de desenho agora é "burro": ele apenas lê o estado atual e desenha, ele não processa colisões mais.
 
         if (jogo.getEstado() == Jogo.Estado.ENCERRADO) {
             desenharTelaFim(canvas);
@@ -402,6 +410,9 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         return glow;
     }
 
+    // Arquitetura: RenderThread é dedicada exclusivamente para a Lógica de Desenho (UI Thread).
+    // Concorrência: A separação do loop de renderização (aqui) do Game Loop de física (physicsTimer no Jogo.java)
+    // permite desenhar a ~30 FPS com os dados mais recentes do jogo, sem o risco de a renderização deixar a lógica de negócio lenta.
     private class RenderThread extends Thread {
         private final SurfaceHolder holder;
         private volatile boolean running;

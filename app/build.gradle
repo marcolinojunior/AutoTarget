@@ -37,3 +37,34 @@ dependencies {
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }
+
+// Tarefa de Javadoc compatível com AGP moderno
+afterEvaluate {
+    tasks.register('generateJavadoc', Javadoc) {
+        description = "Gera a documentação Javadoc do projeto."
+        group = "documentation"
+
+        source = android.sourceSets.main.java.srcDirs
+        
+        // Tenta obter o classpath da tarefa de compilação
+        doFirst {
+            def compileTask = tasks.findByName('compileDebugJavaWithJavac')
+            if (compileTask) {
+                classpath = compileTask.classpath
+            }
+        }
+
+        destinationDir = file("${project.rootDir}/docs/javadoc")
+        
+        options.encoding = 'UTF-8'
+        options.charSet = 'UTF-8'
+        options.author = true
+        options.version = true
+        options.memberLevel = JavadocMemberLevel.PRIVATE
+        
+        // Silencia avisos de bibliotecas externas
+        options.addStringOption('Xdoclint:none', '-quiet')
+        
+        failOnError false
+    }
+}

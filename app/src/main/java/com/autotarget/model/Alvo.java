@@ -12,6 +12,8 @@ import java.util.List; // ADDED LIST IMPORT
  * <p>
  * Herança: Alvo → AlvoComum, AlvoRapido (polimorfismo).
  */
+// OOP: Esta classe abstrata serve como base (Herança) para os diferentes tipos de alvos.
+// Concorrência: Estende Thread para que cada alvo tenha seu próprio fluxo de execução independente, permitindo movimento paralelo.
 public abstract class Alvo extends Thread {
 
     // ── Atributos ────────────────────────────────────────────────
@@ -76,6 +78,8 @@ public abstract class Alvo extends Thread {
                 mover();
                 verificarLimites();
                 verificarColisoes(); // REGRA 4: Alvo verifica colisão
+                // Concorrência: Pausa a thread atual por um curto período (INTERVALO_ATUALIZACAO).
+                // Isso dita a taxa de atualização da física do alvo e evita consumo excessivo de CPU.
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -86,6 +90,8 @@ public abstract class Alvo extends Thread {
 
     private void verificarColisoes() {
         // REGRA 4: O método run() do Alvo itera sobre a lista de projéteis e verifica colisão
+        // Concorrência: Aqui criamos uma Região Crítica (usando collisionLock) para evitar Race Conditions.
+        // Isso garante que a checagem e a eventual marcação de destruição sejam seguras contra outras threads.
         synchronized (collisionLock) {
             if (!this.ativo) return;
 
@@ -110,6 +116,8 @@ public abstract class Alvo extends Thread {
      * Move o alvo de acordo com seu padrão de movimento.
      * Implementado pelas subclasses (polimorfismo).
      */
+    // OOP: Método abstrato que força as subclasses a implementarem suas próprias lógicas de movimento.
+    // Isso é a base do Polimorfismo neste projeto, permitindo tratar AlvoComum e AlvoRapido de forma genérica.
     public abstract void mover();
 
     // ── Lógica de limites ────────────────────────────────────────

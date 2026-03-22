@@ -9,6 +9,8 @@ import java.util.List;
  * possui uma chance de 5% de trocar aleatoriamente de direção,
  * tornando-o mais difícil de interceptar.
  */
+// OOP: Herança demonstrando que AlvoRapido também é um tipo de Alvo,
+// mas com comportamentos especializados de movimentação.
 public class AlvoRapido extends Alvo {
 
     /** Multiplicador de velocidade em relação à velocidade base. */
@@ -38,6 +40,8 @@ public class AlvoRapido extends Alvo {
      * Movimento rápido: aplica 2x na velocidade e muda de direção
      * aleatoriamente com 5% de chance a cada frame.
      */
+    // OOP: Mais um exemplo de Polimorfismo. O método mover() aqui foi sobrescrito
+    // para adicionar uma lógica totalmente diferente: um movimento caótico (mudança aleatória) e acelerado.
     @Override
     public void mover() {
         // Mudança aleatória de direção
@@ -54,6 +58,8 @@ public class AlvoRapido extends Alvo {
     /**
      * Retorna a velocidade efetiva (com o multiplicador aplicado).
      */
+    // OOP: Sobrescrita de método concreto da classe mãe (Alvo). Polimorfismo também se aplica
+    // ao recuperar propriedades quando a subclasse tem regras específicas de cálculo.
     @Override
     public float getVelocidade() {
         return super.getVelocidade() * MULTIPLICADOR_VELOCIDADE;
