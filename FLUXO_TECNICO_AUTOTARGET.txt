@@ -1,0 +1,549 @@
+================================================================================
+     FLUXO TÉCNICO DE OPERAÇÃO DO AUTOTARGET — EXPLICAÇÃO COMPLETA
+================================================================================
+
+Este documento descreve, de forma lógica e sequencial, todo o fluxo de
+operação da aplicação AutoTarget desde o momento em que o usuário abre
+o app até o encerramento de uma partida.
+
+================================================================================
+1. INICIALIZAÇÃO DA APLICAÇÃO (MainActivity.onCreate)
+================================================================================
+
+Quando o usuário abre o app, o Android instancia a MainActivity e chama
+onCreate(). Nesse momento acontece:
+
+  1.1. O layout XML (activity_main.xml) é inflado via setContentView().
+       Esse layout contém:
+       - Um FrameLayout (gameContainer) — onde o canvas será inserido.
+       - Botão "Iniciar" (btnIniciar).
+       - Botão "Adicionar Canhão Esquerdo" (btnCanhaoEsquerdo).
+       - Botão "Adicionar Canhão Direito" (btnCanhaoDireito).
+       - TextViews: pontuação (tvPontuacao), estado (tvEstado),
+         alvos ativos (tvAlvosAtivos), tempo (tvTempo), energia (tvEnergia).
+
+  1.2. Um objeto Jogo é criado (new Jogo()). O construtor do Jogo:
+       - Inicializa listas thread-safe: CopyOnWriteArrayList<Alvo> e
+         CopyOnWriteArrayList<Canhao>.
+       - Define estado = PARADO, pontuações = 0, energia = 1000 por lado.
+       - Define tempo restante = 60 segundos.
+       - Cria instâncias dos serviços: DataReconciliation, FirestoreRepository,
+         Cryptography.
+       - Cria os locks de sincronização: collisionLock e sensorLock.
+
+  1.3. A MainActivity se registra como listener do Jogo via
+       jogo.setListener(this), implementando a interface OnJogoListener.
+       Isso permite que o Jogo notifique a UI sobre mudanças de estado.
+
+  1.4. Uma GameSurfaceView é criada e adicionada ao FrameLayout.
+       A GameSurfaceView:
+       - Implementa SurfaceHolder.Callback para gerenciar o ciclo de vida
+         da superfície de desenho.
+       - Inicializa todos os objetos Paint (cores, estilos) para renderização:
+         verde para AlvoComum, laranja para AlvoRapido, ciano para canhão
+         esquerdo, rosa para canhão direito, dourado para projéteis.
+       - Recebe a referência do Jogo via setJogo().
+
+  1.5. Os botões são configurados com listeners (configurarBotoes()).
+
+  1.6. Quando a SurfaceView fica pronta (surfaceCreated), ela:
+       - Chama jogo.setDimensoesTela(largura, altura) para o Jogo saber
+         os limites do canvas.
+       - Cria e inicia a RenderThread, que começa a desenhar a ~30 FPS (33FPS).
+
+Neste ponto, o app está na tela inicial com o canvas vazio (fundo escuro
+com grid), botões visíveis e estado = PARADO.
+
+
+================================================================================
+2. RENDERIZAÇÃO CONTÍNUA (GameSurfaceView.RenderThread)
+================================================================================
+
+A RenderThread é uma thread interna da GameSurfaceView que roda
+continuamente enquanto a surface existir:
+
+  Loop a cada ~33ms (30 FPS):
+    1. Calcula o tempo alvo por frame: 1000 / 30 = ~33ms.
+    2. Faz holder.lockCanvas() para obter o Canvas exclusivo.
+    3. Dentro de synchronized(holder), chama desenhar(canvas):
+       a) Preenche o fundo com cor escura (#1A1A2E).
+       b) Desenha grid decorativo (linhas a cada 60px).
+       c) Desenha a linha divisória central tracejada (DashPathEffect).
+       d) Desenha labels "ESQUERDO" e "DIREITO" na parte inferior.
+       e) Itera jogo.getAlvos(): para cada alvo ativo, desenha um círculo
+          com glow (alpha 60) + círculo sólido. A cor é polimórfica:
+          - instanceof AlvoRapido → laranja (#FF9800)
+          - senão (AlvoComum) → verde (#4CAF50)
+       f) Itera jogo.getCanhoes(): para cada canhão ativo, desenha um
+          triângulo rotacionado pelo ângulo do canhão. Cor por lado:
+          - ESQUERDO → ciano (#00B4D8)
+          - DIREITO → rosa (#E94560)
+          Também itera os projéteis do canhão e desenha círculos dourados.
+       g) Se estado == RODANDO: desenha HUD (barra de tempo, barras de
+          energia por lado, pontuação por lado) e chama
+          jogo.verificarColisoes() (lógica de colisão por frame).
+       h) Se estado == ENCERRADO: desenha overlay escuro + box de resultado.
+    4. Faz holder.unlockCanvasAndPost(canvas) para exibir o frame.
+    5. Calcula tempo gasto e faz sleep() para manter 30 FPS.
+
+
+================================================================================
+3. ADIÇÃO DE CANHÕES (antes de iniciar o jogo)
+================================================================================
+
+O usuário pode adicionar canhões a qualquer momento. Ao tocar em
+"Adicionar Canhão Esquerdo" ou "Direito":
+
+  3.1. MainActivity.adicionarCanhaoNoLado(Lado) é chamado.
+
+  3.2. Calcula a posição automática em grid na metade correspondente
+       da tela (3 colunas, linhas empilhadas de baixo para cima).
+
+  3.3. Chama jogo.adicionarCanhao(x, y, lado), que:
+       a) Valida se a posição está dentro dos limites da tela.
+          Se não → lança JogoException("Canhão fora dos limites!").
+       b) Conta canhões existentes no mesmo lado.
+          Se >= 10 → lança JogoException("Máximo de canhões atingido!").
+       c) Se o jogo estiver rodando, verifica energia do lado.
+          Se energia < 5 → lança JogoException("Energia insuficiente!").
+       d) Cria new Canhao(x, y, lado, alvos, collisionLock, largura, altura).
+          O canhão recebe referência à lista compartilhada de alvos e ao
+          lock de colisão.
+       e) Se canhões do lado >= 5 (limiar), aplica penalidade (2x intervalo).
+       f) Adiciona à lista canhoes (CopyOnWriteArrayList).
+       g) Se estado == RODANDO, inicia a thread do canhão (canhao.start()).
+
+  3.4. Se JogoException for lançada, é capturada na MainActivity com
+       try-catch e exibida como Toast ao usuário.
+
+
+================================================================================
+4. INÍCIO DA PARTIDA (Botão Iniciar → jogo.iniciar())
+================================================================================
+
+Quando o usuário toca "Iniciar":
+
+  4.1. MainActivity verifica o estado atual:
+       - Se RODANDO → chama jogo.pararJogo().
+       - Se ENCERRADO → reinicia o jogo (cria novo Jogo).
+       - Se PARADO → chama jogo.iniciar().
+
+  4.2. jogo.iniciar() (synchronized) executa:
+
+       a) Valida: se já estiver RODANDO → lança JogoException.
+       b) Define estado = RODANDO, reseta pontuações, energia e tempo.
+       c) Registra timestampInicio = System.currentTimeMillis().
+
+       d) Cria e inicia Timer "SpawnAlvoTimer":
+          - A cada 3000ms, chama spawnarAlvo().
+          - spawnarAlvo() gera posição X,Y aleatória dentro da tela.
+          - Decide aleatoriamente (50/50) entre AlvoComum ou AlvoRapido:
+            • AlvoComum: movimento linear, velocidade base.
+            • AlvoRapido: velocidade 2x, 5% chance de mudar direção.
+          - Adiciona o alvo à lista compartilhada e chama alvo.start().
+
+       e) Cria e inicia Timer "GameTimer" (a cada 1000ms):
+          - Incrementa segundosDecorridos.
+          - Calcula tempoRestante = 60 - segundosDecorridos.
+          - Chama atualizarEnergia(): subtrai 5 de energia por canhão ativo
+            de cada lado. Se energia de um lado chegar a 0, desativa o
+            último canhão desse lado.
+          - Chama aplicarPenalidades(): se um lado tem >5 canhões ativos,
+            aplica penalidade (intervaloDisparo * 2) nos canhões desse lado.
+          - Notifica o listener (MainActivity) com tempo e energia.
+          - Se tempoRestante <= 0 → chama encerrarPartida().
+
+       f) Cria e inicia SensorThread:
+          - Thread daemon que coleta dados a cada 2000ms.
+          - Será detalhada na seção 6.
+
+       g) Cria e inicia ReconciliacaoThread:
+          - Thread daemon que reconcilia dados a cada 10000ms.
+          - Será detalhada na seção 7.
+
+       h) Cria e inicia FirebaseIOThread:
+          - Thread daemon que aguarda tarefas de persistência.
+          - Será detalhada na seção 8.
+
+       i) Inicia threads de todos os canhões existentes (for: c.start()).
+
+       j) Notifica o listener: estado, tempo, energia, pontuação.
+
+
+================================================================================
+5. CICLO DE JOGO EM EXECUÇÃO (Estado RODANDO)
+================================================================================
+
+Com o jogo rodando, múltiplas threads operam simultaneamente:
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    THREADS ATIVAS SIMULTANEAMENTE              │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  • RenderThread (GameSurfaceView) — 30 FPS, desenha + colisões │
+  │  • N threads Alvo — cada alvo se move independentemente        │
+  │  • N threads Canhao — cada canhão dispara independentemente    │
+  │  • N threads Projetil — cada projétil se move + verifica colisão│
+  │  • SensorThread — coleta dados a cada 2s                       │
+  │  • ReconciliacaoThread — reconcilia a cada 10s                 │
+  │  • FirebaseIOThread — aguarda tarefas de persistência          │
+  │  • SpawnAlvoTimer — spawna alvos a cada 3s                     │
+  │  • GameTimer — contagem regressiva + energia a cada 1s         │
+  └─────────────────────────────────────────────────────────────────┘
+
+--- 5.1. Thread de cada ALVO (Alvo.run) ---
+
+  Loop enquanto ativo == true (a cada 30ms):
+    1. Chama mover() — POLIMÓRFICO:
+       • AlvoComum.mover(): x += direcaoX * velocidade;
+                            y += direcaoY * velocidade;
+       • AlvoRapido.mover(): 5% chance de novo ângulo aleatório;
+                             x += direcaoX * velocidade * 2;
+                             y += direcaoY * velocidade * 2;
+    2. Chama verificarLimites(): se ultrapassou bordas da tela,
+       inverte a direção correspondente (bouncing).
+    3. Thread.sleep(30) — ~33 atualizações/segundo.
+
+  O alvo se move livremente pela tela toda. Ao cruzar a linha central
+  (larguraTela / 2), ele passa a "pertencer" ao outro lado para fins
+  de pontuação e targeting.
+
+--- 5.2. Thread de cada CANHÃO (Canhao.run) ---
+
+  Loop enquanto ativo == true (a cada 1500ms ou 3000ms com penalidade):
+    1. Chama disparar():
+       a) encontrarAlvoMaisProximoNoMesmoLado():
+          - Itera todos os alvos ativos.
+          - Filtra: só considera alvos cujo Lado.determinar(alvo.x, largura)
+            seja igual ao lado deste canhão.
+          - Calcula distância euclidiana para cada um.
+          - Retorna o mais próximo (ou null se nenhum).
+       b) Se não há alvo no mesmo lado → retorna sem disparar.
+       c) Calcula direção normalizada (dx/dist, dy/dist).
+       d) Calcula ângulo (Math.atan2) para rotação do triângulo visual.
+       e) Cria new Projetil com posição do canhão, direção calculada,
+          velocidade 12 px/frame, referências à lista de alvos e collisionLock.
+       f) Adiciona à lista de projéteis com synchronized(projeteis).
+       g) Inicia a thread do projétil (projetil.start()).
+    2. Chama limparProjetisInativos(): com synchronized(projeteis),
+       remove projéteis com ativo == false (já colidiram ou saíram da tela).
+    3. Thread.sleep(intervaloDisparo) — 1500ms base ou 3000ms com penalidade.
+
+--- 5.3. Thread de cada PROJÉTIL (Projetil.run) ---
+
+  Loop enquanto ativo == true (a cada 16ms ≈ 60 updates/s):
+    1. Chama mover(): x += direcaoX * velocidade; y += direcaoY * velocidade.
+    2. Verifica foraDosTela(): se x/y ultrapassaram os limites → ativo = false.
+    3. Chama verificarColisoes():
+       ┌──────────────────────────────────────────────────────────┐
+       │  REGIÃO CRÍTICA — synchronized(collisionLock)           │
+       │                                                          │
+       │  Para cada alvo na lista compartilhada:                  │
+       │    Se alvo.isAtivo() E collide(alvo):                    │
+       │      dist = sqrt((px-ax)² + (py-ay)²)                   │
+       │      Se dist <= 5 (raioProjetil) + raioAlvo:             │
+       │        → alvo.setAtivo(false)  // alvo destruído         │
+       │        → projetil.ativo = false // projétil consumido    │
+       │        → break                                           │
+       │                                                          │
+       │  O collisionLock garante que APENAS UM projétil pode     │
+       │  verificar colisão por vez, evitando que dois projéteis  │
+       │  "matem" o mesmo alvo simultaneamente.                   │
+       └──────────────────────────────────────────────────────────┘
+    4. Thread.sleep(16).
+
+--- 5.4. Verificação de colisões no Jogo (a cada frame) ---
+
+  A RenderThread chama jogo.verificarColisoes() em cada frame:
+    1. Dentro de synchronized(collisionLock), conta alvos com ativo == false.
+    2. Para cada alvo destruído:
+       - Determina o lado onde o alvo estava: Lado.determinar(alvo.x, largura).
+       - Incrementa pontuação do lado correspondente.
+       - Remove o alvo da lista compartilhada.
+    3. Notifica o listener com a pontuação atualizada.
+    4. Notifica a contagem de alvos ativos.
+
+
+================================================================================
+6. THREAD DE SENSORES (SensorThread)
+================================================================================
+
+Operação contínua a cada 2000ms enquanto o jogo está rodando:
+
+  1. Entra em synchronized(sensorLock) — REGIÃO CRÍTICA compartilhada
+     com a ReconciliacaoThread.
+
+  2. Conta quantos alvos estão ativos na lista compartilhada.
+
+  3. Cria arrays float[] do tamanho correspondente.
+
+  4. Para cada alvo ativo, coleta:
+     - leiturasPosX[i] = alvo.getX() + ruídoGaussiano * 5.0
+     - leiturasPosY[i] = alvo.getY() + ruídoGaussiano * 5.0
+     - leiturasVelocidade[i] = alvo.getVelocidade() + ruídoGaussiano * 0.5
+
+     O ruído gaussiano (Random.nextGaussian()) simula a imprecisão de
+     sensores reais — as leituras não são exatas.
+
+  5. Registra quantidadeAlvosColetados.
+
+  6. Chama sensorLock.notifyAll() — avisa a ReconciliacaoThread que
+     há dados novos disponíveis para reconciliar.
+
+
+================================================================================
+7. THREAD DE RECONCILIAÇÃO (ReconciliacaoThread)
+================================================================================
+
+Operação a cada 10000ms (10 segundos):
+
+  1. Thread.sleep(10000) — aguarda intervalo de reconciliação.
+
+  2. Entra em synchronized(sensorLock) — mesma região crítica da SensorThread.
+
+  3. Chama executarReconciliacao():
+     a) Lê os buffers da SensorThread:
+        - sensorThread.getLeiturasPosX()
+        - sensorThread.getLeiturasPosY()
+        - sensorThread.getLeiturasVelocidade()
+        - sensorThread.getQuantidadeAlvosColetados()
+     b) Chama dataReconciliation.reconcile() (stub na AV1 — retorna true).
+     c) Se sucesso e count > 0:
+        - Incrementa reconciliacoesRealizadas.
+        - Notifica o Jogo via listener.onReconciliacaoConcluida(total).
+        - O Jogo restaura +10 de energia por lado como recompensa.
+
+  A reconciliação serve para "corrigir" os dados ruidosos dos sensores e
+  decidir se vale realocar/adicionar/remover canhões (otimização futura AV2).
+
+
+================================================================================
+8. THREAD FIREBASE I/O (FirebaseIOThread)
+================================================================================
+
+Esta thread fica bloqueada aguardando tarefas na BlockingQueue:
+
+  Loop enquanto ativo:
+    1. FirebaseTask task = taskQueue.take() — BLOQUEIA até receber tarefa.
+    2. Quando recebe uma tarefa:
+       a) Criptografa dados: cryptography.encrypt(task.dadosExtras).
+          Na AV1, o stub retorna os dados sem alteração.
+       b) Persiste: firestoreRepository.salvarPartida(pontuacao, tempo).
+          Na AV1, o stub não faz nada (preparado para Firebase SDK na AV2).
+    3. Se ocorrer exceção no processo, captura e continua no loop.
+
+  A tarefa é enfileirada pelo Jogo ao encerrar a partida via:
+    firebaseIOThread.salvarAsync(pontuacao, tempo, dados)
+    → taskQueue.put(new FirebaseTask(...))
+
+
+================================================================================
+9. SISTEMA DE ENERGIA (a cada segundo via GameTimer)
+================================================================================
+
+  Cada lado tem um orçamento de energia independente (máximo = 1000).
+
+  A cada segundo:
+    1. Conta canhões ativos por lado (canhoesEsq, canhoesDir).
+    2. Subtrai: energiaLado -= contCanhoes * 5 (CUSTO_ENERGIA_POR_CANHAO).
+    3. Se energia de um lado chega a 0:
+       - Desativa o último canhão ativo desse lado (pararCanhao).
+       - Fixa energia em 0.
+    4. A reconciliação restaura +10 de energia por lado a cada ciclo
+       bem-sucedido (incentivo para o sistema de reconciliação funcionar).
+
+  Isso cria uma dinâmica estratégica: mais canhões = mais abates, mas
+  também mais consumo de energia. O jogador precisa equilibrar.
+
+
+================================================================================
+10. SISTEMA DE PENALIDADES (a cada segundo via GameTimer)
+================================================================================
+
+  A cada segundo, aplicarPenalidades() verifica cada lado:
+    1. Conta canhões ativos por lado.
+    2. Se um lado tem > 5 canhões ativos (LIMIAR_PENALIDADE):
+       - Todos os canhões desse lado recebem penalidade:
+         intervaloDisparo = 1500ms * 2 = 3000ms (disparam mais devagar).
+    3. Se tem <= 5: remove a penalidade (volta a 1500ms).
+
+  Isso penaliza o excesso de canhões — mais canhões = disparos mais lentos.
+
+
+================================================================================
+11. ENCERRAMENTO DA PARTIDA (tempoRestante <= 0)
+================================================================================
+
+Quando o GameTimer detecta tempoRestante <= 0:
+
+  11.1. encerrarPartida() (synchronized) é chamado:
+        a) Define estado = ENCERRADO, tempoRestante = 0.
+        b) Cancela os dois Timers (spawnTimer, gameTimer).
+        c) Para TODAS as threads:
+           - Cada Alvo: setAtivo(false) + interrupt().
+           - Cada Canhao: pararCanhao() + interrupt().
+             pararCanhao() também desativa todos os projéteis do canhão.
+           - SensorThread: setAtivo(false) + interrupt().
+           - ReconciliacaoThread: setAtivo(false) + interrupt().
+           - FirebaseIOThread: aguarda 500ms numa thread separada, depois
+             setAtivo(false) + interrupt() (dá tempo de processar a fila).
+
+        d) Calcula tempo total real: (currentTimeMillis - timestampInicio) / 1000.
+
+        e) Determina vencedor:
+           - Se pontuacaoEsquerdo > pontuacaoDireito → ESQUERDO vence.
+           - Se pontuacaoDireito > pontuacaoEsquerdo → DIREITO vence.
+           - Se iguais → Empate (vencedor = null).
+
+        f) Enfileira dados para persistência no Firebase:
+           - Monta string: "esquerdo=X;direito=Y;tempo=Z"
+           - Chama firebaseIOThread.salvarAsync(pontuacaoTotal, tempo, dados).
+           - A FirebaseIOThread vai criptografar e salvar assincronamente.
+
+        g) Notifica o listener: onEstadoAlterado(ENCERRADO),
+           onTempoAtualizado(0), e onPartidaEncerrada(...).
+
+  11.2. MainActivity.onPartidaEncerrada() é chamado via callback:
+        a) Executa no UI thread via uiHandler.post().
+        b) Monta string do vencedor com emoji.
+        c) Exibe AlertDialog com:
+           - Título: "🎯 Fim de Jogo!"
+           - Vencedor (ou empate).
+           - Pontuação de cada lado.
+           - Tempo total.
+           - Número de reconciliações realizadas.
+           - Quantidade de canhões por lado.
+           - Confirmação de salvamento no Firestore.
+        d) Botão "Jogar Novamente" → chama reiniciarJogo().
+        e) Botão "Fechar" → fecha o diálogo.
+
+  11.3. A RenderThread continua rodando e agora desenha a tela de fim:
+        - Overlay escuro semi-transparente.
+        - Box arredondado com borda rosa.
+        - Texto "FIM DE JOGO" + pontuações + vencedor.
+        - Instrução "Toque em Iniciar para jogar novamente".
+
+
+================================================================================
+12. REINÍCIO DO JOGO (reiniciarJogo)
+================================================================================
+
+  1. Cria um NOVO objeto Jogo (descarta o anterior).
+  2. Registra o listener novamente.
+  3. Define dimensões da tela no novo Jogo.
+  4. Atualiza a referência na GameSurfaceView.
+  5. Reseta contadores de canhões (canhaoCountEsq/Dir = 0).
+  6. Reseta TextViews para valores iniciais.
+
+  O jogo volta ao estado PARADO, pronto para novas adições de canhões
+  e um novo clique em "Iniciar".
+
+
+================================================================================
+13. MAPA COMPLETO DE SINCRONIZAÇÃO
+================================================================================
+
+  ┌───────────────────────────────────────────────────────────────────┐
+  │                    RECURSOS COMPARTILHADOS                       │
+  ├───────────────────────────────────────────────────────────────────┤
+  │                                                                   │
+  │  Lista de Alvos (CopyOnWriteArrayList<Alvo>)                     │
+  │    → Escrita: Jogo.spawnarAlvo(), Jogo.verificarColisoes()       │
+  │    → Leitura: Canhao.disparar(), Projetil.verificarColisoes(),   │
+  │               SensorThread.coletarDados(), RenderThread          │
+  │                                                                   │
+  │  Lista de Canhões (CopyOnWriteArrayList<Canhao>)                 │
+  │    → Escrita: Jogo.adicionarCanhao()                             │
+  │    → Leitura: Jogo.atualizarEnergia(), aplicarPenalidades(),     │
+  │               RenderThread                                       │
+  │                                                                   │
+  │  collisionLock (Object)                                          │
+  │    → Usado por: Projetil.verificarColisoes(), Jogo.verificar...  │
+  │    → Garante: apenas um projétil verifica colisão por vez        │
+  │                                                                   │
+  │  sensorLock (Object)                                             │
+  │    → Usado por: SensorThread.coletarDados() [produtor]           │
+  │                 ReconciliacaoThread.executarReconciliacao() [cons]│
+  │    → Garante: acesso atômico aos buffers de leitura              │
+  │                                                                   │
+  │  BlockingQueue<FirebaseTask> (LinkedBlockingQueue)                │
+  │    → Produtor: Jogo.encerrarPartida() via salvarAsync()          │
+  │    → Consumidor: FirebaseIOThread.run() via take()               │
+  │                                                                   │
+  │  volatile: estado, pontuacaoEsq/Dir, energiaEsq/Dir,            │
+  │            tempoRestante, ativo (em todas as threads)            │
+  │                                                                   │
+  │  synchronized: Jogo.iniciar(), pararJogo(), encerrarPartida()    │
+  │                Canhao: projeteis (add/remove)                    │
+  │                RenderThread: holder (lockCanvas)                  │
+  └───────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+14. HIERARQUIA DE HERANÇA E POLIMORFISMO
+================================================================================
+
+                        Thread (java.lang)
+                            │
+              ┌─────────────┼──────────────┐
+              │             │              │
+           Alvo (abstrata) Canhao       Projetil
+              │
+      ┌───────┴───────┐
+      │               │
+   AlvoComum      AlvoRapido
+
+  • Alvo define mover() como abstrato.
+  • AlvoComum.mover() → movimento linear simples.
+  • AlvoRapido.mover() → velocidade 2x + 5% chance de nova direção.
+  • AlvoRapido sobrescreve getVelocidade() para retornar vel * 2.
+
+  POLIMORFISMO EM AÇÃO:
+  - Jogo.spawnarAlvo(): cria AlvoComum ou AlvoRapido, mas adiciona como Alvo.
+  - GameSurfaceView: itera List<Alvo>, usa instanceof para cor diferente.
+  - Canhao.disparar(): encontra alvo mais próximo como Alvo (genérico).
+  - AlvoTest.testPolimorfismoMover(): cria como referência Alvo, chama mover().
+
+
+================================================================================
+15. TRATAMENTO DE EXCEÇÕES (JogoException)
+================================================================================
+
+  JogoException é lançada em 4 situações no Jogo:
+    1. adicionarCanhao() com posição fora da tela.
+    2. adicionarCanhao() com máximo de canhões por lado excedido (10).
+    3. adicionarCanhao() com energia insuficiente.
+    4. iniciar() quando o jogo já está rodando.
+
+  É capturada em 2 pontos na MainActivity:
+    1. configurarBotoes() → btnIniciar: try-catch com Toast + Log.e.
+    2. adicionarCanhaoNoLado() → try-catch com Toast + Log.w.
+
+  Cada thread também trata InterruptedException em seu run():
+    → Thread.currentThread().interrupt() + ativo = false (shutdown gracioso).
+
+
+================================================================================
+16. TESTES UNITÁRIOS (JUnit)
+================================================================================
+
+  4 classes de teste com 30 testes no total:
+
+  AlvoTest (8 testes):
+    • Criação, polimorfismo de velocidade e movimento, distância euclidiana
+      (horizontal, vertical, diagonal, mesmo ponto), estado, instanceof Thread.
+
+  CanhaoTest (8 testes):
+    • Criação ESQ/DIR, disparo sem alvo, disparo mesmo lado, ignora outro lado,
+      parar canhão, penalidade intervalo, determinação de lado.
+
+  ProjetilTest (9 testes):
+    • Distância euclidiana, colisão (detectada, não detectada, fronteira),
+      movimento retilíneo e diagonal, estado, instanceof Thread.
+
+  JogoExceptionTest (5 testes):
+    • Mensagem simples, com causa, lançamento, captura try-catch, herança.
+
+
+================================================================================
+FIM DO DOCUMENTO
+================================================================================

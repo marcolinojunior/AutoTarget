@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Paleta principal (dark theme cybernético) -->
+    <color name="primary">#E94560</color>
+    <color name="primary_dark">#C81E45</color>
+    <color name="secondary">#0F3460</color>
+    <color name="accent">#00B4D8</color>
+
+    <color name="background_dark">#1A1A2E</color>
+    <color name="surface_dark">#16213E</color>
+
+    <color name="alvo_comum">#4CAF50</color>
+    <color name="alvo_rapido">#FF9800</color>
+    <color name="canhao">#E94560</color>
+    <color name="projetil">#FFD700</color>
+
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0BEC5</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>
