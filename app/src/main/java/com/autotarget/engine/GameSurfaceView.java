@@ -45,6 +45,11 @@
  *   5. Desenha HUD (tempo, energia, pontuação)
  *   6. Se estado == ENCERRADO → overlay + box de fim de jogo
  *
+ * ESCALONAMENTO RMA (Rate Monotonic Analysis):
+ *   Tarefa: T4 — RenderThread.run (Canvas)
+ *   Período P₄ = 33ms (~30FPS), Execução C₄ = 5-12ms, Deadline D₄ = 33ms
+ *   Prioridade RM: 3 (Média)
+ *
  * ============================================================================
  */
 package com.autotarget.engine;

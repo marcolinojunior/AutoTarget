@@ -75,6 +75,9 @@
  */
 package com.autotarget.engine;
 
+import android.content.Context;
+import android.util.Log;
+
 import com.autotarget.exception.JogoException;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
@@ -82,12 +85,17 @@ import com.autotarget.model.AlvoRapido;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.model.Projetil;
-import com.autotarget.service.Cryptography;
-import com.autotarget.service.DataReconciliation;
+import com.autotarget.network.FirestoreRepository;
+import com.autotarget.util.Cryptography;
+import com.autotarget.util.DataReconciliation;
+import com.autotarget.util.QuadTree;
+import com.autotarget.util.RMAAnalysis;
 import com.autotarget.service.FirebaseIOThread;
-import com.autotarget.service.FirestoreRepository;
 import com.autotarget.service.ReconciliacaoThread;
 import com.autotarget.service.SensorThread;
+import com.autotarget.service.ThermalSensorService;
+
+import android.graphics.RectF;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -126,17 +134,19 @@ public class Jogo {
     private static final float VELOCIDADE_ALVO = 3f;
     public static final int DURACAO_PARTIDA_SEGUNDOS = 60;
     private static final float ENERGIA_MAXIMA = 100f;
-    private static final float CUSTO_ENERGIA_POR_CANHAO = 5f;
+    private static final float CUSTO_ENERGIA_POR_CANHAO = 1f;
 
     // ── Atributos ────────────────────────────────────────────────
 
     private volatile Estado estado;
 
-    /** Lista global de alvos (alvos se movem livremente pela tela). */
-    private final CopyOnWriteArrayList<Alvo> alvos;
-
-    /** Lista global de canhões (cada um tem seu Lado). */
-    private final CopyOnWriteArrayList<Canhao> canhoes;
+    /** Listas por lado (exigência AV2) */
+    private final CopyOnWriteArrayList<Alvo> alvosEsquerdo;
+    private final CopyOnWriteArrayList<Alvo> alvosDireito;
+    private final CopyOnWriteArrayList<Canhao> canhoesEsquerdo;
+    private final CopyOnWriteArrayList<Canhao> canhoesDireito;
+    
+    private final Object listLock = new Object();
 
     private final Object collisionLock = new Object();
 
@@ -174,6 +184,13 @@ public class Jogo {
     private final DataReconciliation dataReconciliation;
     private final FirestoreRepository firestoreRepository;
     private final Cryptography cryptography;
+    private ThermalSensorService thermalSensorService;
+    private Context context;
+
+    /** QuadTree para otimização espacial (AV4). Toggle para benchmark. */
+    private volatile boolean useQuadTree = false;
+    private QuadTree quadTreeEsquerdo;
+    private QuadTree quadTreeDireito;
     private volatile int reconciliacoesRealizadas;
 
     private OnJogoListener listener;
@@ -192,9 +209,12 @@ public class Jogo {
 
     // ── Construtor ───────────────────────────────────────────────
 
-    public Jogo() {
-        this.alvos = new CopyOnWriteArrayList<>();
-        this.canhoes = new CopyOnWriteArrayList<>();
+    public Jogo(Context context) {
+        this.context = context;
+        this.alvosEsquerdo = new CopyOnWriteArrayList<>();
+        this.alvosDireito = new CopyOnWriteArrayList<>();
+        this.canhoesEsquerdo = new CopyOnWriteArrayList<>();
+        this.canhoesDireito = new CopyOnWriteArrayList<>();
         this.estado = Estado.PARADO;
         this.pontuacaoEsquerdo = 0;
         this.pontuacaoDireito = 0;
@@ -205,6 +225,11 @@ public class Jogo {
         this.dataReconciliation = new DataReconciliation();
         this.firestoreRepository = new FirestoreRepository();
         this.cryptography = new Cryptography();
+    }
+
+    /** Construtor sem Context (para testes). */
+    public Jogo() {
+        this(null);
     }
 
     // ── Controle do jogo ─────────────────────────────────────────
@@ -253,28 +278,61 @@ public class Jogo {
         }, 1000, 1000);
 
         // Physics Timer — verificação de colisões a cada 16ms (~60Hz)
-        // REMOVIDA A CHAMADA jogo.verificarColisoes() DA RENDER THREAD.
-        // Único responsável por contabilizar pontos e remover alvos destruídos.
+        // T1: PhysicsTimer P=16ms C=2-4ms D=16ms Prio=1 (Máxima)
         physicsTimer = new Timer("PhysicsTimer", true);
         physicsTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                if (estado == Estado.RODANDO) verificarColisoes();
+                if (estado == Estado.RODANDO) {
+                    long startNs = System.nanoTime();
+                    
+                    // Atualiza a física de movimentação dos canhões (Deslize a 60Hz)
+                    for (Canhao c : getAllCanhoes()) {
+                        if (c.isAtivo() && c.isMovendo()) {
+                            c.atualizarMovimento();
+                        }
+                    }
+
+                    transferirAlvosCruzados();
+                    verificarColisoes();
+                    long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                    RMAAnalysis.checkDeadline("T1-Physics", elapsedMs, 16);
+                }
             }
         }, 0, 16);
 
-        // Thread Sensores/Coleta — recebe collisionLock para iterar alvos com segurança
-        sensorThread = new SensorThread(alvos, sensorLock, collisionLock);
+        // Thread Sensores/Coleta (com ref canhões para distâncias)
+        sensorThread = new SensorThread(this, sensorLock, collisionLock);
         sensorThread.start();
 
-        // Thread Reconciliação+Otimização
+        // Thread Reconciliação+Otimização (com EJML)
         reconciliacaoThread = new ReconciliacaoThread(
-                dataReconciliation, sensorThread, alvos, sensorLock);
-        reconciliacaoThread.setListener(totalRec -> {
-            reconciliacoesRealizadas = totalRec;
-            energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + 10f);
-            energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + 10f);
-            notificarEnergia();
+                dataReconciliation, sensorThread, this,
+                sensorLock, collisionLock);
+        reconciliacaoThread.setLarguraTela(larguraTela);
+        reconciliacaoThread.setAlturaTela(alturaTela);
+        reconciliacaoThread.setListener(new ReconciliacaoThread.OnReconciliacaoListener() {
+            @Override
+            public void onReconciliacaoConcluida(int totalRec) {
+                reconciliacoesRealizadas = totalRec;
+                energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + 10f);
+                energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + 10f);
+                notificarEnergia();
+            }
+            @Override
+            public void onSugestaoAdicionarCanhao(Lado lado, float x, float y) {
+                try { adicionarCanhao(x, y, lado); } catch (JogoException e) {
+                    Log.w("Jogo", "Reconciliação: não pôde adicionar canhão", e);
+                }
+            }
+            @Override
+            public void onSugestaoRemoverCanhao(Lado lado) {
+                desativarUltimoCanhao(lado);
+            }
+            @Override
+            public void onRealocarCanhao(Canhao canhao, float novoX, float novoY) {
+                // Já tratado dentro do ReconciliacaoThread via canhao.moverPara()
+            }
         });
         reconciliacaoThread.start();
 
@@ -282,8 +340,18 @@ public class Jogo {
         firebaseIOThread = new FirebaseIOThread(firestoreRepository, cryptography);
         firebaseIOThread.start();
 
+        // Serviço térmico ciberfísico (AV3)
+        if (context != null) {
+            thermalSensorService = new ThermalSensorService(
+                    context, getAllCanhoes(), firestoreRepository);
+            thermalSensorService.iniciar();
+        }
+
+        // Análise RMA no início do jogo
+        RMAAnalysis.executarAnalise();
+
         // Iniciar threads dos canhões existentes
-        for (Canhao c : canhoes) {
+        for (Canhao c : getAllCanhoes()) {
             if (!c.isAlive()) c.start();
         }
 
@@ -320,13 +388,16 @@ public class Jogo {
             vencedor = null; // Empate
         }
 
-        // Salvar via Thread Firebase I/O
+        // Salvar via Thread Firebase I/O (DTO completo + criptografia)
         if (firebaseIOThread != null && firebaseIOThread.isAlive()) {
             String dados = "esquerdo=" + pontuacaoEsquerdo
                     + ";direito=" + pontuacaoDireito
-                    + ";tempo=" + tempoTotal;
+                    + ";tempo=" + tempoTotal
+                    + ";reconciliacoes=" + reconciliacoesRealizadas;
+            String vencedorStr = vencedor != null ? vencedor.name() : "EMPATE";
             firebaseIOThread.salvarAsync(
-                    pontuacaoEsquerdo + pontuacaoDireito, tempoTotal, dados);
+                    pontuacaoEsquerdo, pontuacaoDireito, tempoTotal,
+                    reconciliacoesRealizadas, vencedorStr, dados);
         }
 
         notificarEstado();
@@ -342,10 +413,11 @@ public class Jogo {
 
     private void atualizarEnergia() {
         int canhoesEsq = 0, canhoesDir = 0;
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) canhoesEsq++;
-            else canhoesDir++;
+        for (Canhao c : canhoesEsquerdo) {
+            if (c.isAtivo()) canhoesEsq++;
+        }
+        for (Canhao c : canhoesDireito) {
+            if (c.isAtivo()) canhoesDir++;
         }
 
         energiaEsquerdo = Math.max(0f, energiaEsquerdo - canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
@@ -363,9 +435,10 @@ public class Jogo {
     }
 
     private void desativarUltimoCanhao(Lado lado) {
-        for (int i = canhoes.size() - 1; i >= 0; i--) {
-            Canhao c = canhoes.get(i);
-            if (c.isAtivo() && c.getLado() == lado) {
+        CopyOnWriteArrayList<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
+        for (int i = lista.size() - 1; i >= 0; i--) {
+            Canhao c = lista.get(i);
+            if (c.isAtivo()) {
                 c.pararCanhao();
                 break;
             }
@@ -378,21 +451,19 @@ public class Jogo {
      * Aplica ou remove penalidade nos canhões acima do limiar por lado.
      * Canhões além de LIMIAR_PENALIDADE no mesmo lado têm taxa de disparo 2x.
      */
+    /**
+     * Aplica penalidade exponencial: I = I_base × (1 + max(0, N-L) × α)
+     */
     private void aplicarPenalidades() {
         int contEsq = 0, contDir = 0;
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) contEsq++;
-            else contDir++;
-        }
+        for (Canhao c : canhoesEsquerdo) { if (c.isAtivo()) contEsq++; }
+        for (Canhao c : canhoesDireito) { if (c.isAtivo()) contDir++; }
 
-        for (Canhao c : canhoes) {
-            if (!c.isAtivo()) continue;
-            if (c.getLado() == Lado.ESQUERDO) {
-                c.aplicarPenalidade(contEsq > LIMIAR_PENALIDADE);
-            } else {
-                c.aplicarPenalidade(contDir > LIMIAR_PENALIDADE);
-            }
+        for (Canhao c : canhoesEsquerdo) {
+            if (c.isAtivo()) c.aplicarPenalidade(contEsq);
+        }
+        for (Canhao c : canhoesDireito) {
+            if (c.isAtivo()) c.aplicarPenalidade(contDir);
         }
     }
 
@@ -411,11 +482,8 @@ public class Jogo {
                     "Canhão fora dos limites da tela! Posição: (" + x + ", " + y + ")");
         }
 
-        // Contar canhões do mesmo lado
-        int countLado = 0;
-        for (Canhao c : canhoes) {
-            if (c.getLado() == lado) countLado++;
-        }
+        CopyOnWriteArrayList<Canhao> listaCanhoes = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
+        int countLado = listaCanhoes.size();
 
         if (countLado >= MAX_CANHOES_POR_LADO) {
             throw new JogoException(
@@ -428,15 +496,16 @@ public class Jogo {
             throw new JogoException("Energia insuficiente no lado " + lado + "!");
         }
 
-        Canhao canhao = new Canhao(x, y, lado, alvos, collisionLock,
-                larguraTela, alturaTela);
+        CopyOnWriteArrayList<Alvo> listaAlvos = (lado == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+        Canhao canhao = new Canhao(x, y, lado, listaAlvos, collisionLock,
+                larguraTela, alturaTela, this);
 
         // Penalty check
         if (countLado >= LIMIAR_PENALIDADE) {
             canhao.aplicarPenalidade(true);
         }
 
-        canhoes.add(canhao);
+        listaCanhoes.add(canhao);
 
         if (estado == Estado.RODANDO) {
             canhao.start();
@@ -456,35 +525,71 @@ public class Jogo {
             alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
         }
 
-        alvos.add(alvo);
+        Lado lado = Lado.determinar(x, larguraTela);
+        if (lado == Lado.ESQUERDO) {
+            alvosEsquerdo.add(alvo);
+        } else {
+            alvosDireito.add(alvo);
+        }
+
         alvo.start();
     }
 
     // ── Verificação de colisões (por lado) ───────────────────────
 
     /**
-     * Verifica colisões e atribui pontos ao lado correto.
-     * A pontuação vai para o lado onde o alvo estava quando foi destruído.
+     * Implementa a exigência da rubrica de transferência atômica de alvos
+     * que cruzam a linha central da tela.
      */
+    private void transferirAlvosCruzados() {
+        synchronized (listLock) {
+            for (Alvo alvo : alvosEsquerdo) {
+                if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
+                    alvosEsquerdo.remove(alvo);
+                    alvosDireito.add(alvo);
+                }
+            }
+            for (Alvo alvo : alvosDireito) {
+                if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
+                    alvosDireito.remove(alvo);
+                    alvosEsquerdo.add(alvo);
+                }
+            }
+        }
+    }
+
     public int verificarColisoes() {
+        // Reconstruir QuadTree (Otimização AV4)
+        if (useQuadTree && larguraTela > 0 && alturaTela > 0) {
+            synchronized (collisionLock) {
+                quadTreeEsquerdo = new QuadTree(0, new RectF(0, 0, larguraTela / 2f, alturaTela));
+                quadTreeDireito = new QuadTree(0, new RectF(larguraTela / 2f, 0, larguraTela, alturaTela));
+                for (Alvo alvo : alvosEsquerdo) {
+                    if (alvo.isAtivo()) quadTreeEsquerdo.insert(alvo);
+                }
+                for (Alvo alvo : alvosDireito) {
+                    if (alvo.isAtivo()) quadTreeDireito.insert(alvo);
+                }
+            }
+        } else {
+            quadTreeEsquerdo = null;
+            quadTreeDireito = null;
+        }
+
         int destruidos = 0;
         synchronized (collisionLock) {
-            for (Alvo alvo : alvos) {
+            for (Alvo alvo : getAllAlvos()) {
                 if (!alvo.isAtivo()) destruidos++;
             }
         }
 
         if (destruidos > 0) {
-            for (Alvo alvo : alvos) {
-                if (!alvo.isAtivo()) {
-                    // Ponto para o lado onde o alvo estava
-                    Lado ladoAlvo = Lado.determinar(alvo.getX(), larguraTela);
-                    if (ladoAlvo == Lado.ESQUERDO) {
-                        pontuacaoEsquerdo++;
-                    } else {
-                        pontuacaoDireito++;
-                    }
-                    alvos.remove(alvo);
+            synchronized (listLock) {
+                for (Alvo alvo : alvosEsquerdo) {
+                    if (!alvo.isAtivo()) { pontuacaoEsquerdo++; alvosEsquerdo.remove(alvo); }
+                }
+                for (Alvo alvo : alvosDireito) {
+                    if (!alvo.isAtivo()) { pontuacaoDireito++; alvosDireito.remove(alvo); }
                 }
             }
             notificarPontuacao();
@@ -503,10 +608,11 @@ public class Jogo {
     }
 
     private void pararTodasThreads() {
-        for (Alvo a : alvos) { a.setAtivo(false); a.interrupt(); }
-        for (Canhao c : canhoes) { c.pararCanhao(); c.interrupt(); }
+        for (Alvo a : getAllAlvos()) { a.setAtivo(false); a.interrupt(); }
+        for (Canhao c : getAllCanhoes()) { c.pararCanhao(); c.interrupt(); }
         if (sensorThread != null) { sensorThread.setAtivo(false); sensorThread.interrupt(); }
         if (reconciliacaoThread != null) { reconciliacaoThread.setAtivo(false); reconciliacaoThread.interrupt(); }
+        if (thermalSensorService != null) { thermalSensorService.parar(); }
         if (firebaseIOThread != null) {
             new Thread(() -> {
                 try { Thread.sleep(500); } catch (InterruptedException ignored) {}
@@ -529,7 +635,7 @@ public class Jogo {
     private void notificarAlvosAtivos() {
         if (listener != null) {
             int ativos = 0;
-            for (Alvo a : alvos) { if (a.isAtivo()) ativos++; }
+            for (Alvo a : getAllAlvos()) { if (a.isAtivo()) ativos++; }
             listener.onAlvosAtivosAtualizado(ativos);
         }
     }
@@ -554,13 +660,13 @@ public class Jogo {
      * Retorna defensive copy da lista de alvos.
      * Protege a referência interna contra modificação externa indevida.
      */
-    public List<Alvo> getAlvos() { return new ArrayList<>(alvos); }
+    public List<Alvo> getAlvos() { return getAllAlvos(); }
 
     /**
      * Retorna defensive copy da lista de canhões.
      * Protege a referência interna contra modificação externa indevida.
      */
-    public List<Canhao> getCanhoes() { return new ArrayList<>(canhoes); }
+    public List<Canhao> getCanhoes() { return getAllCanhoes(); }
     public Object getCollisionLock() { return collisionLock; }
 
     public void setDimensoesTela(int largura, int altura) {
@@ -575,4 +681,30 @@ public class Jogo {
 
     public static float getEnergiaMaxima() { return ENERGIA_MAXIMA; }
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
+
+    public void setUseQuadTree(boolean use) { this.useQuadTree = use; }
+    public boolean isUseQuadTree() { return useQuadTree; }
+    public QuadTree getQuadTree(Lado lado) { 
+        return lado == Lado.ESQUERDO ? quadTreeEsquerdo : quadTreeDireito; 
+    }
+    public FirestoreRepository getFirestoreRepository() { return firestoreRepository; }
+    public Cryptography getCryptography() { return cryptography; }
+    public CopyOnWriteArrayList<Canhao> getCanhoesEsquerdo() { return canhoesEsquerdo; }
+    public CopyOnWriteArrayList<Canhao> getCanhoesDireito() { return canhoesDireito; }
+    public CopyOnWriteArrayList<Alvo> getAlvosEsquerdo() { return alvosEsquerdo; }
+    public CopyOnWriteArrayList<Alvo> getAlvosDireito() { return alvosDireito; }
+
+    public List<Alvo> getAllAlvos() {
+        List<Alvo> list = new ArrayList<>();
+        list.addAll(alvosEsquerdo);
+        list.addAll(alvosDireito);
+        return list;
+    }
+
+    public List<Canhao> getAllCanhoes() {
+        List<Canhao> list = new ArrayList<>();
+        list.addAll(canhoesEsquerdo);
+        list.addAll(canhoesDireito);
+        return list;
+    }
 }

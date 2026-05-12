@@ -11,4 +11,7 @@
     <string name="alvos_ativos_inicial">Alvos: 0</string>
     <string name="tempo_inicial">⏱ 01:00</string>
     <string name="energia_inicial">⚡E:100 | D:100</string>
+
+    <!-- TODO: Replace with your actual Web Client ID from Firebase Console -->
+    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID.apps.googleusercontent.com</string>
 </resources>

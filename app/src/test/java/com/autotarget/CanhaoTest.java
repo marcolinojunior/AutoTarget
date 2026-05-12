@@ -45,6 +45,7 @@ import com.autotarget.model.AlvoRapido;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.model.Projetil;
+import com.autotarget.engine.Jogo;
 
 import org.junit.After;
 import org.junit.Before;
@@ -65,6 +66,7 @@ public class CanhaoTest {
 
     private CopyOnWriteArrayList<Alvo> alvos;
     private Object collisionLock;
+    private Jogo jogo;
     private static final int LARGURA = 800;
     private static final int ALTURA = 600;
 
@@ -75,6 +77,7 @@ public class CanhaoTest {
     public void setUp() {
         alvos = new CopyOnWriteArrayList<>();
         collisionLock = new Object();
+        jogo = new Jogo();
         canhoesTestados.clear();
     }
 
@@ -97,7 +100,7 @@ public class CanhaoTest {
     @Test
     public void testCriacaoCanhaoEsquerdo() {
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
 
         assertEquals(100f, canhao.getX(), 0.001f);
@@ -112,7 +115,7 @@ public class CanhaoTest {
     @Test
     public void testCriacaoCanhaoDireito() {
         Canhao canhao = new Canhao(600, 200, Lado.DIREITO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
 
         assertEquals(Lado.DIREITO, canhao.getLado());
@@ -122,7 +125,7 @@ public class CanhaoTest {
     @Test
     public void testDisparoSemAlvo() {
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
         canhao.disparar();
 
@@ -137,7 +140,7 @@ public class CanhaoTest {
 
         // Canhão no lado esquerdo
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
         canhao.disparar();
 
@@ -153,7 +156,7 @@ public class CanhaoTest {
 
         // Canhão no lado ESQUERDO
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
         canhao.disparar();
 
@@ -167,7 +170,7 @@ public class CanhaoTest {
         alvos.add(alvo);
 
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
         canhao.disparar();
         canhao.pararCanhao();
@@ -181,7 +184,7 @@ public class CanhaoTest {
     @Test
     public void testPenalidadeAumentaIntervaloDisparo() {
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
-                collisionLock, LARGURA, ALTURA);
+                collisionLock, LARGURA, ALTURA, jogo);
         canhoesTestados.add(canhao);
 
         int intervaloBase = Canhao.getIntervaloDisparoBase();

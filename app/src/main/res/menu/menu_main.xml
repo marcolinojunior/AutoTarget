@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_ranking"
+        android:title="🏆 Ranking"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_trl"
+        android:title="📊 TRL"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_benchmark"
+        android:title="⚡ Benchmark"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_logout"
+        android:title="🚪 Sair"
+        app:showAsAction="never" />
+
+</menu>

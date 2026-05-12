@@ -40,6 +40,11 @@
  *   - ativo: flag volatile de controle do loop da thread (boolean)
  *   - larguraTela, alturaTela: limites do canvas para bouncing (int)
  *
+ * ESCALONAMENTO RMA (Rate Monotonic Analysis):
+ *   Tarefa: T3 — Alvo.run (Trajetórias)
+ *   Período P₃ = 30ms, Execução C₃ = 1-3ms, Deadline D₃ = 30ms
+ *   Prioridade RM: 2 (Alta)
+ *
  * ============================================================================
  */
 package com.autotarget.model;

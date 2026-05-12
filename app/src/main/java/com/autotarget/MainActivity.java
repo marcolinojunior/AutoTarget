@@ -47,10 +47,13 @@
  */
 package com.autotarget;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.TextView;
@@ -64,6 +67,11 @@ import com.autotarget.engine.GameSurfaceView;
 import com.autotarget.engine.Jogo;
 import com.autotarget.exception.JogoException;
 import com.autotarget.model.Lado;
+import com.autotarget.ui.BenchmarkActivity;
+import com.autotarget.ui.LoginActivity;
+import com.autotarget.ui.RankingActivity;
+import com.autotarget.ui.TrlActivity;
+import com.google.firebase.auth.FirebaseAuth;
 
 /**
  * Activity principal do AutoTarget.
@@ -100,9 +108,18 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Verificar autenticação
+        FirebaseAuth auth = FirebaseAuth.getInstance();
+        if (auth.getCurrentUser() == null) {
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return;
+        }
+
         setContentView(R.layout.activity_main);
 
-        jogo = new Jogo();
+        jogo = new Jogo(this);
         jogo.setListener(this);
 
         FrameLayout container = findViewById(R.id.gameContainer);
@@ -154,8 +171,10 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
         // Canhão Esquerdo
         btnCanhaoEsquerdo.setOnClickListener(v -> adicionarCanhaoNoLado(Lado.ESQUERDO));
 
-        // Canhão Direito
-        btnCanhaoDireito.setOnClickListener(v -> adicionarCanhaoNoLado(Lado.DIREITO));
+        // Canhão Direito (Desabilitado para o usuário, IA controla)
+        btnCanhaoDireito.setText("Canhões DIR (IA)");
+        btnCanhaoDireito.setEnabled(false);
+        // btnCanhaoDireito.setOnClickListener(v -> adicionarCanhaoNoLado(Lado.DIREITO));
     }
 
     /**
@@ -208,7 +227,7 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
     }
 
     private void reiniciarJogo() {
-        jogo = new Jogo();
+        jogo = new Jogo(this);
         jogo.setListener(this);
         jogo.setDimensoesTela(gameSurfaceView.getWidth(), gameSurfaceView.getHeight());
         gameSurfaceView.setJogo(jogo);
@@ -294,5 +313,33 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
 
             atualizarBotaoIniciar();
         });
+    }
+    // ── Menu ────────────────────────────────────────────────────
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_main, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_ranking) {
+            startActivity(new Intent(this, RankingActivity.class));
+            return true;
+        } else if (id == R.id.action_trl) {
+            startActivity(new Intent(this, TrlActivity.class));
+            return true;
+        } else if (id == R.id.action_benchmark) {
+            startActivity(new Intent(this, BenchmarkActivity.class));
+            return true;
+        } else if (id == R.id.action_logout) {
+            FirebaseAuth.getInstance().signOut();
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 }

@@ -39,6 +39,11 @@
  *   - Ao colidir: alvo.setAtivo(false) + projetil.ativo = false
  *   - RAIO do projétil = 5f (constante)
  *
+ * ESCALONAMENTO RMA (Rate Monotonic Analysis):
+ *   Tarefa: T2 — Projetil.run (Balística)
+ *   Período P₂ = 16ms, Execução C₂ = 1-2ms, Deadline D₂ = 16ms
+ *   Prioridade RM: 1 (Máxima)
+ *
  * ============================================================================
  */
 package com.autotarget.model;
@@ -78,6 +83,12 @@ public class Projetil extends Thread {
     private final int larguraTela;
     private final int alturaTela;
 
+    /** Referência ao motor do jogo para QuadTree. */
+    private final com.autotarget.engine.Jogo jogo;
+    
+    /** Lado ao qual este projétil pertence. */
+    private final com.autotarget.model.Lado lado;
+
     // ── Construtor ───────────────────────────────────────────────
 
     /**
@@ -95,7 +106,8 @@ public class Projetil extends Thread {
      */
     public Projetil(float x, float y, float direcaoX, float direcaoY,
                     float velocidade, List<Alvo> alvos, Object collisionLock,
-                    int larguraTela, int alturaTela) {
+                    int larguraTela, int alturaTela, com.autotarget.engine.Jogo jogo,
+                    com.autotarget.model.Lado lado) {
         this.x = x;
         this.y = y;
         this.direcaoX = direcaoX;
@@ -105,6 +117,8 @@ public class Projetil extends Thread {
         this.collisionLock = collisionLock;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
+        this.jogo = jogo;
+        this.lado = lado;
         this.ativo = true;
     }
 
@@ -156,7 +170,16 @@ public class Projetil extends Thread {
      */
     private void verificarColisoes() {
         synchronized (collisionLock) {
-            for (Alvo alvo : alvos) {
+            com.autotarget.util.QuadTree qt = jogo.getQuadTree(this.lado);
+            List<Alvo> candidatos;
+            
+            if (qt != null) {
+                candidatos = qt.query(this.x, this.y, RAIO);
+            } else {
+                candidatos = alvos;
+            }
+            
+            for (Alvo alvo : candidatos) {
                 if (alvo.isAtivo() && collide(alvo)) {
                     alvo.setAtivo(false);
                     this.ativo = false;

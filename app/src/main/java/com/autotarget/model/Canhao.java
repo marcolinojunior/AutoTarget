@@ -8,64 +8,49 @@
  *   Classe que representa um canhão autônomo no jogo AutoTarget. Cada canhão
  *   opera em sua própria thread, pertence a um Lado (ESQUERDO ou DIREITO),
  *   e dispara projéteis automaticamente em direção ao alvo ativo mais próximo
- *   que esteja no MESMO lado. Mantém sua própria lista de projéteis e controla
- *   o intervalo de disparo, que pode sofrer penalidade (2x) quando o número
- *   de canhões do lado excede o limiar base.
+ *   que esteja no MESMO lado.
  *
- * TÓPICOS DA RUBRICA ATENDIDOS NESTE ARQUIVO:
+ * ESCALONAMENTO RMA (Rate Monotonic Analysis):
+ *   Tarefa: T6 — Canhao.run (Disparos)
+ *   Período P₆ = 1500ms (base), Execução C₆ = 3-5ms, Deadline D₆ = 1500ms
+ *   Prioridade RM: 5 (Baixa)
+ *   Fórmula Liu & Layland: Σ(Ci/Pi) ≤ n(2^(1/n) - 1)
  *
- *   ► Classes/threads (6.1.4):
- *     - Canhao extends Thread — cada canhão é uma thread independente.
- *     - Atributos: posição (x, y), ângulo de rotação, lado, lista de projéteis.
- *     - Método run() → loop while(ativo) { disparar(); limparInativos(); sleep(); }
- *     - Método disparar() → localiza alvo mais próximo no mesmo lado, calcula
- *       direção normalizada, cria Projetil e inicia sua thread.
+ * PENALIDADE EXPONENCIAL (AV2 §6.2.2-b):
+ *   I_novo = I_base × (1 + max(0, N - L) × α)
+ *   Onde: L=5 (limiar), α=0.2 (coeficiente de penalidade)
  *
- *   ► Sincronização e região crítica (6.1.5):
- *     - collisionLock (Object) — repassado a cada Projetil para verificação
- *       sincronizada de colisão com alvos (região crítica compartilhada).
- *     - synchronized(projeteis) — bloco sincronizado na lista de projéteis
- *       ao adicionar novos projéteis e ao limpar inativos.
- *     - CopyOnWriteArrayList para a lista de projéteis.
+ * REALOCAÇÃO (AV2 §6.2.2-d):
+ *   Canhões podem mover-se gradualmente para posição ótima calculada
+ *   pela ReconciliacaoThread via moverPara().
  *
- *   ► Tratamento de exceções (6.1.6):
- *     - try-catch em run() para InterruptedException (para thread com graça).
- *     - try-catch ao calcular ângulo (Math.atan2) para evitar erros aritméticos.
- *     - Verificação de distância < 0.001f para evitar divisão por zero.
- *
- *   ► Cenário competitivo (seção 4.2):
- *     - Cada canhão pertence a um Lado e só mira em alvos do MESMO lado.
- *     - Penalidade de taxa de disparo: intervaloDisparo é duplicado quando
- *       canhões do mesmo lado excedem LIMIAR_PENALIDADE (5).
- *     - pararCanhao() desativa o canhão e todos os seus projéteis.
- *
- * ATRIBUTOS PRINCIPAIS:
- *   - x, y: posição fixa do canhão no canvas (float)
- *   - angulo: ângulo de rotação para renderização do triângulo (float)
- *   - lado: campo ao qual pertence (Lado.ESQUERDO ou Lado.DIREITO)
- *   - projeteis: CopyOnWriteArrayList<Projetil> — projéteis ativos deste canhão
- *   - intervaloDisparo: ms entre disparos (base 1500ms, penalidade 3000ms)
+ * RETROALIMENTAÇÃO TÉRMICA (AV3 §6.3.2-d):
+ *   thermalPenaltyFactor multiplica o intervalo de sleep quando
+ *   temperatura > 40°C.
  *
  * ============================================================================
  */
 package com.autotarget.model;
+
+import android.util.Log;
+import com.autotarget.util.RMAAnalysis;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Canhão autônomo que opera em sua própria thread.
- * <p>
- * Pertence a um {@link Lado} (esquerdo ou direito) e só pode disparar
- * contra alvos que estejam no mesmo lado. Quando o número de canhões
- * do seu lado ultrapassa o limite base, sofre penalidade na taxa de
- * disparo (intervalo entre tiros aumenta).
  */
 public class Canhao extends Thread {
 
+    private static final String TAG = "Canhao";
+
     // ── Atributos ────────────────────────────────────────────────
-    private float x;
-    private float y;
+    private volatile float x;
+    private volatile float y;
+    private volatile float targetX;
+    private volatile float targetY;
+    private volatile boolean movendo;
     private float angulo;
     private volatile boolean ativo;
 
@@ -81,14 +66,29 @@ public class Canhao extends Thread {
     /** Lock global para colisão. */
     private final Object collisionLock;
 
+    /** Referência ao motor do jogo (para acessar QuadTree). */
+    private final com.autotarget.engine.Jogo jogo;
+
     /** Velocidade dos projéteis disparados. */
     private static final float VELOCIDADE_PROJETIL = 12f;
 
     /** Intervalo base entre disparos (ms). */
     private static final int INTERVALO_DISPARO_BASE = 1500;
 
+    /** Limiar de penalidade (L = 5). */
+    private static final int LIMIAR_PENALIDADE = 5;
+
+    /** Coeficiente de penalidade (α = 0.2). */
+    private static final float ALPHA_PENALIDADE = 0.2f;
+
+    /** Velocidade de movimento de realocação (pixels por frame). */
+    private static final float VELOCIDADE_MOVIMENTO = 2.0f;
+
     /** Intervalo de disparo efetivo (pode ter penalidade). */
-    private int intervaloDisparo;
+    private volatile int intervaloDisparo;
+
+    /** Fator de penalidade térmica (AV3 — controle por feedback). */
+    private volatile float thermalPenaltyFactor = 1.0f;
 
     /** Limites da tela. */
     private int larguraTela;
@@ -96,21 +96,14 @@ public class Canhao extends Thread {
 
     // ── Construtor ───────────────────────────────────────────────
 
-    /**
-     * Cria um canhão em uma posição fixa, pertencente a um lado.
-     *
-     * @param x             posição X
-     * @param y             posição Y
-     * @param lado          lado (ESQUERDO ou DIREITO)
-     * @param alvos         lista compartilhada de alvos
-     * @param collisionLock lock para região crítica de colisão
-     * @param larguraTela   largura do canvas
-     * @param alturaTela    altura do canvas
-     */
     public Canhao(float x, float y, Lado lado, List<Alvo> alvos,
-                  Object collisionLock, int larguraTela, int alturaTela) {
+                  Object collisionLock, int larguraTela, int alturaTela,
+                  com.autotarget.engine.Jogo jogo) {
         this.x = x;
         this.y = y;
+        this.targetX = x;
+        this.targetY = y;
+        this.movendo = false;
         this.lado = lado;
         this.angulo = 0f;
         this.ativo = true;
@@ -118,6 +111,7 @@ public class Canhao extends Thread {
         this.collisionLock = collisionLock;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
+        this.jogo = jogo;
         this.projeteis = new CopyOnWriteArrayList<>();
         this.intervaloDisparo = INTERVALO_DISPARO_BASE;
     }
@@ -127,10 +121,19 @@ public class Canhao extends Thread {
     @Override
     public void run() {
         while (ativo) {
+            long startNs = System.nanoTime();
             try {
                 disparar();
                 limparProjetisInativos();
-                Thread.sleep(intervaloDisparo);
+
+                // Intervalo com penalidade térmica aplicada
+                long sleepMs = (long) (intervaloDisparo * thermalPenaltyFactor);
+                Thread.sleep(sleepMs);
+
+                // ── Instrumentação RMA ──
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                RMAAnalysis.checkDeadline("T6-Canhao", elapsedMs, intervaloDisparo);
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 ativo = false;
@@ -140,10 +143,6 @@ public class Canhao extends Thread {
 
     // ── Disparo ──────────────────────────────────────────────────
 
-    /**
-     * Dispara um projétil em direção ao alvo ativo mais próximo
-     * que esteja no MESMO LADO deste canhão.
-     */
     public void disparar() {
         Alvo alvoMaisProximo = encontrarAlvoMaisProximoNoMesmoLado();
         if (alvoMaisProximo == null) {
@@ -171,7 +170,7 @@ public class Canhao extends Thread {
         Projetil projetil = new Projetil(
                 this.x, this.y, dirX, dirY,
                 VELOCIDADE_PROJETIL, alvos, collisionLock,
-                larguraTela, alturaTela
+                larguraTela, alturaTela, jogo, this.lado
         );
         synchronized (projeteis) {
             projeteis.add(projetil);
@@ -179,12 +178,6 @@ public class Canhao extends Thread {
         projetil.start();
     }
 
-    /**
-     * Encontra o alvo ativo mais próximo que esteja no MESMO LADO.
-     * Alvos são filtrados pela posição X relativa à linha divisória.
-     *
-     * @return o alvo mais próximo no mesmo lado, ou null se nenhum
-     */
     private Alvo encontrarAlvoMaisProximoNoMesmoLado() {
         Alvo maisProximo = null;
         float menorDistancia = Float.MAX_VALUE;
@@ -192,9 +185,7 @@ public class Canhao extends Thread {
         for (Alvo alvo : alvos) {
             if (!alvo.isAtivo()) continue;
 
-            // Só mira em alvos do MESMO LADO
-            Lado ladoAlvo = Lado.determinar(alvo.getX(), larguraTela);
-            if (ladoAlvo != this.lado) continue;
+            if (!alvo.isAtivo()) continue;
 
             float dist = Alvo.calcularDistancia(this.x, this.y,
                     alvo.getX(), alvo.getY());
@@ -206,22 +197,28 @@ public class Canhao extends Thread {
         return maisProximo;
     }
 
-    /**
-     * Remove projéteis inativos da lista para liberar memória.
-     */
     private void limparProjetisInativos() {
         synchronized (projeteis) {
             projeteis.removeIf(p -> !p.isAtivo());
         }
     }
 
-    // ── Penalidade ───────────────────────────────────────────────
+    // ── Penalidade Exponencial (AV2) ────────────────────────────
 
     /**
-     * Aplica penalidade na taxa de disparo.
-     * Canhões além do limiar base têm intervalo de disparo aumentado.
+     * Aplica penalidade exponencial na taxa de disparo.
+     * I_novo = I_base × (1 + max(0, N - L) × α)
      *
-     * @param penalidade true para aplicar penalidade (2x intervalo)
+     * @param totalCanhoesNoLado número total de canhões no mesmo lado (N)
+     */
+    public void aplicarPenalidade(int totalCanhoesNoLado) {
+        float fator = 1.0f + Math.max(0, totalCanhoesNoLado - LIMIAR_PENALIDADE)
+                * ALPHA_PENALIDADE;
+        this.intervaloDisparo = (int) (INTERVALO_DISPARO_BASE * fator);
+    }
+
+    /**
+     * Sobrecarga de compatibilidade com API anterior.
      */
     public void aplicarPenalidade(boolean penalidade) {
         if (penalidade) {
@@ -231,11 +228,46 @@ public class Canhao extends Thread {
         }
     }
 
-    // ── Controle ─────────────────────────────────────────────────
+    // ── Realocação Gradual (AV2 §6.2.2-d) ──────────────────────
 
     /**
-     * Para o canhão e todos os seus projéteis.
+     * Define um novo destino para o canhão. A movimentação ocorre
+     * gradualmente, a cada ciclo do run().
+     *
+     * @param novoX posição X de destino
+     * @param novoY posição Y de destino
      */
+    public void moverPara(float novoX, float novoY) {
+        this.targetX = novoX;
+        this.targetY = novoY;
+        this.movendo = true;
+        Log.i(TAG, String.format("Canhão %s movendo para (%.0f, %.0f)",
+                lado.name(), novoX, novoY));
+    }
+
+    /**
+     * Atualiza posição gradualmente em direção ao destino.
+     * Agora chamado pelo motor de física (PhysicsTimer) a 60Hz.
+     */
+    public void atualizarMovimento() {
+        if (!movendo) return;
+
+        float dx = targetX - x;
+        float dy = targetY - y;
+        float dist = (float) Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < VELOCIDADE_MOVIMENTO) {
+            x = targetX;
+            y = targetY;
+            movendo = false;
+        } else {
+            x += (dx / dist) * VELOCIDADE_MOVIMENTO;
+            y += (dy / dist) * VELOCIDADE_MOVIMENTO;
+        }
+    }
+
+    // ── Controle ─────────────────────────────────────────────────
+
     public void pararCanhao() {
         this.ativo = false;
         synchronized (projeteis) {
@@ -246,7 +278,7 @@ public class Canhao extends Thread {
         }
     }
 
-    // ── Getters ──────────────────────────────────────────────────
+    // ── Getters / Setters ────────────────────────────────────────
 
     public float getX() { return x; }
     public float getY() { return y; }
@@ -255,10 +287,18 @@ public class Canhao extends Thread {
     public Lado getLado() { return lado; }
     public List<Projetil> getProjeteis() { return projeteis; }
     public int getIntervaloDisparo() { return intervaloDisparo; }
+    public boolean isMovendo() { return movendo; }
 
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
 
+    /** Define fator de penalidade térmica (AV3). 1.0 = normal. */
+    public void setThermalPenaltyFactor(float factor) {
+        this.thermalPenaltyFactor = factor;
+    }
+
     public static int getIntervaloDisparoBase() { return INTERVALO_DISPARO_BASE; }
+    public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
+    public static float getAlphaPenalidade() { return ALPHA_PENALIDADE; }
 }
