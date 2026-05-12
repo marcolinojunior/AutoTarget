@@ -123,7 +123,20 @@ public class Canhao extends Thread {
         while (ativo) {
             long startNs = System.nanoTime();
             try {
-                disparar();
+                // ── Fase 1: Recalcular penalidade dinâmica antes de cada disparo ──
+                // Consulta o Jogo para saber quantos canhões ativos existem
+                // no mesmo lado e recalcula I_novo = I_base × (1 + max(0, N-L) × α)
+                int nAtivos = jogo.contarCanhoesAtivos(this.lado);
+                aplicarPenalidade(nAtivos);
+
+                // ── Fase 1: Verificar energia do lado ──
+                // Se a energia do lado chegou a 0, o canhão pausa disparos
+                // mas continua existindo (a thread não morre).
+                float energiaLado = jogo.getEnergia(this.lado);
+                if (energiaLado > 0) {
+                    disparar();
+                }
+
                 limparProjetisInativos();
 
                 // Intervalo com penalidade térmica aplicada
@@ -144,15 +157,17 @@ public class Canhao extends Thread {
     // ── Disparo ──────────────────────────────────────────────────
 
     public void disparar() {
-        Alvo alvoMaisProximo = encontrarAlvoMaisProximoNoMesmoLado();
-        if (alvoMaisProximo == null) {
-            return;
+        // Solicitar alvo via sistema de reserva coordenada
+        // Apenas alvos NÃO reservados por outro canhão são considerados
+        Alvo alvoReservado = jogo.reservarAlvo(this);
+        if (alvoReservado == null) {
+            return; // Nenhum alvo livre disponível
         }
 
-        float dx = alvoMaisProximo.getX() - this.x;
-        float dy = alvoMaisProximo.getY() - this.y;
+        float dx = alvoReservado.getX() - this.x;
+        float dy = alvoReservado.getY() - this.y;
         float distancia = Alvo.calcularDistancia(this.x, this.y,
-                alvoMaisProximo.getX(), alvoMaisProximo.getY());
+                alvoReservado.getX(), alvoReservado.getY());
 
         if (distancia < 0.001f) {
             return;
@@ -170,31 +185,13 @@ public class Canhao extends Thread {
         Projetil projetil = new Projetil(
                 this.x, this.y, dirX, dirY,
                 VELOCIDADE_PROJETIL, alvos, collisionLock,
-                larguraTela, alturaTela, jogo, this.lado
+                larguraTela, alturaTela, jogo, this.lado,
+                alvoReservado
         );
         synchronized (projeteis) {
             projeteis.add(projetil);
         }
         projetil.start();
-    }
-
-    private Alvo encontrarAlvoMaisProximoNoMesmoLado() {
-        Alvo maisProximo = null;
-        float menorDistancia = Float.MAX_VALUE;
-
-        for (Alvo alvo : alvos) {
-            if (!alvo.isAtivo()) continue;
-
-            if (!alvo.isAtivo()) continue;
-
-            float dist = Alvo.calcularDistancia(this.x, this.y,
-                    alvo.getX(), alvo.getY());
-            if (dist < menorDistancia) {
-                menorDistancia = dist;
-                maisProximo = alvo;
-            }
-        }
-        return maisProximo;
     }
 
     private void limparProjetisInativos() {
@@ -292,6 +289,22 @@ public class Canhao extends Thread {
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
+
+    /**
+     * Define posição instantânea do canhão (usado pelo Drag-and-Drop do jogador).
+     * Diferente de moverPara(), que define um destino para glide gradual,
+     * setPosicao() teleporta o canhão diretamente para a coordenada do dedo.
+     *
+     * @param novoX coordenada X do toque
+     * @param novoY coordenada Y do toque
+     */
+    public void setPosicao(float novoX, float novoY) {
+        this.x = novoX;
+        this.y = novoY;
+        this.targetX = novoX;
+        this.targetY = novoY;
+        this.movendo = false;
+    }
 
     /** Define fator de penalidade térmica (AV3). 1.0 = normal. */
     public void setThermalPenaltyFactor(float factor) {

@@ -63,9 +63,12 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.widget.Toast;
 
+import com.autotarget.exception.JogoException;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
@@ -81,6 +84,19 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
     private RenderThread renderThread;
     private Jogo jogo;
+
+    /** Canhão atualmente sendo arrastado pelo jogador (Drag-and-Drop). */
+    private Canhao draggedCanhao;
+    /** Flag: true enquanto o dedo está arrastando um canhão. */
+    private boolean isDragging;
+    /** Raio de detecção de toque sobre um canhão existente. */
+    private static final float RAIO_TOQUE = 50f;
+    /** Altura da zona de lixeira na base da tela. */
+    private static final float ALTURA_LIXEIRA = 100f;
+    /** Paint para zona de lixeira. */
+    private final Paint paintLixeira = new Paint();
+    /** Paint para labels dos campos. */
+    private final Paint paintLabel = new Paint();
 
     private final Paint paintAlvoComum;
     private final Paint paintAlvoRapido;
@@ -209,6 +225,16 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         paintTempoBarra.setColor(Color.parseColor("#FFFFFF"));
         paintTempoBarra.setAntiAlias(true);
         paintTempoBarra.setStyle(Paint.Style.FILL);
+
+        // Lixeira (zona vermelha semi-transparente)
+        paintLixeira.setColor(Color.parseColor("#66E94560"));
+        paintLixeira.setStyle(Paint.Style.FILL);
+
+        // Labels dos campos
+        paintLabel.setColor(Color.parseColor("#55FFFFFF"));
+        paintLabel.setTextSize(18f);
+        paintLabel.setAntiAlias(true);
+        paintLabel.setTextAlign(Paint.Align.CENTER);
     }
 
     // ── SurfaceHolder.Callback ───────────────────────────────────
@@ -240,6 +266,78 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
     public void setJogo(Jogo jogo) { this.jogo = jogo; }
 
+    // ── Drag-and-Drop (Fase 4) ─────────────────────────────────────
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (jogo == null || jogo.getEstado() != Jogo.Estado.RODANDO) {
+            return super.onTouchEvent(event);
+        }
+
+        float touchX = event.getX();
+        float touchY = event.getY();
+        float meioX = getWidth() / 2f;
+
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                // Só permite interação no lado esquerdo (jogador)
+                if (touchX >= meioX) break;
+
+                // Verificar se tocou num canhão existente
+                draggedCanhao = null;
+                for (Canhao c : jogo.getCanhoesEsquerdo()) {
+                    if (!c.isAtivo()) continue;
+                    float dist = Alvo.calcularDistancia(c.getX(), c.getY(), touchX, touchY);
+                    if (dist < RAIO_TOQUE) {
+                        draggedCanhao = c;
+                        break;
+                    }
+                }
+
+                // Se não tocou em nenhum canhão, criar um novo
+                if (draggedCanhao == null) {
+                    try {
+                        jogo.adicionarCanhao(touchX, touchY, Lado.ESQUERDO);
+                        // Pegar o recém-criado
+                        java.util.List<Canhao> lista = jogo.getCanhoesEsquerdo();
+                        if (!lista.isEmpty()) {
+                            draggedCanhao = lista.get(lista.size() - 1);
+                        }
+                    } catch (JogoException e) {
+                        Log.w("GameSurface", "Drag: " + e.getMessage());
+                        post(() -> Toast.makeText(getContext(), e.getMessage(), Toast.LENGTH_SHORT).show());
+                    }
+                }
+
+                isDragging = (draggedCanhao != null);
+                break;
+
+            case MotionEvent.ACTION_MOVE:
+                if (isDragging && draggedCanhao != null) {
+                    // Limitar ao lado esquerdo
+                    float clampX = Math.min(touchX, meioX - 30);
+                    float clampY = Math.max(90, Math.min(touchY, getHeight() - 20));
+                    draggedCanhao.setPosicao(clampX, clampY);
+                }
+                break;
+
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                if (isDragging && draggedCanhao != null) {
+                    // Se soltar na zona da lixeira (base da tela), remover
+                    if (touchY > getHeight() - ALTURA_LIXEIRA) {
+                        jogo.removerCanhao(draggedCanhao);
+                        final String msg = "Canhão removido!";
+                        post(() -> Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show());
+                    }
+                }
+                draggedCanhao = null;
+                isDragging = false;
+                break;
+        }
+        return true;
+    }
+
     // ── Renderização ─────────────────────────────────────────────
 
     private void desenhar(Canvas canvas) {
@@ -259,12 +357,17 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         canvas.drawLine(meioX, 0, meioX, h, paintDivisoria);
 
         // ── Labels dos campos ──
-        Paint labelPaint = new Paint(paintTexto);
-        labelPaint.setAlpha(80);
-        labelPaint.setTextSize(14f);
-        labelPaint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText("ESQUERDO", meioX / 2f, h - 10, labelPaint);
-        canvas.drawText("DIREITO", meioX + meioX / 2f, h - 10, labelPaint);
+        canvas.drawText("JOGADOR", meioX / 2f, h - 10, paintLabel);
+        canvas.drawText("IA \uD83E\uDD16", meioX + meioX / 2f, h - 10, paintLabel);
+
+        // ── Zona de Lixeira (visível durante arrastar) ──
+        if (isDragging) {
+            canvas.drawRect(0, h - ALTURA_LIXEIRA, meioX, h, paintLixeira);
+            Paint lixTxt = new Paint(paintLabel);
+            lixTxt.setColor(Color.parseColor("#CCFFFFFF"));
+            lixTxt.setTextSize(22f);
+            canvas.drawText("\uD83D\uDDD1 SOLTE AQUI PARA REMOVER", meioX / 2f, h - ALTURA_LIXEIRA / 2f + 8, lixTxt);
+        }
 
         // ── Alvos (renderização polimórfica via getCorId()) ──
         for (Alvo alvo : jogo.getAlvos()) {

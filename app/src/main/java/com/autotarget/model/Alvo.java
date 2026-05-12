@@ -77,6 +77,9 @@ public abstract class Alvo extends Thread {
 
     protected final Random random = new Random();
 
+    /** Timestamp de criação do alvo (ms). Usado para penalidade temporal. */
+    private final long timestampNascimento;
+
     /** Intervalo entre atualizações de posição (ms). */
     protected static final int INTERVALO_ATUALIZACAO = 30;
 
@@ -101,6 +104,7 @@ public abstract class Alvo extends Thread {
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
         this.ativo = true;
+        this.timestampNascimento = System.currentTimeMillis();
 
         // Direção inicial aleatória normalizada
         double angulo = random.nextDouble() * 2 * Math.PI;
@@ -188,4 +192,12 @@ public abstract class Alvo extends Thread {
 
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
+
+    /** Retorna a idade do alvo em milissegundos (desde a criação). */
+    public long getIdadeMs() {
+        return System.currentTimeMillis() - timestampNascimento;
+    }
+
+    /** Retorna o timestamp de nascimento. */
+    public long getTimestampNascimento() { return timestampNascimento; }
 }

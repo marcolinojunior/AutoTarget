@@ -89,6 +89,9 @@ public class Projetil extends Thread {
     /** Lado ao qual este projétil pertence. */
     private final com.autotarget.model.Lado lado;
 
+    /** Alvo reservado para este tiro. Liberado ao errar (sair da tela). */
+    private final Alvo alvoReservado;
+
     // ── Construtor ───────────────────────────────────────────────
 
     /**
@@ -107,7 +110,7 @@ public class Projetil extends Thread {
     public Projetil(float x, float y, float direcaoX, float direcaoY,
                     float velocidade, List<Alvo> alvos, Object collisionLock,
                     int larguraTela, int alturaTela, com.autotarget.engine.Jogo jogo,
-                    com.autotarget.model.Lado lado) {
+                    com.autotarget.model.Lado lado, Alvo alvoReservado) {
         this.x = x;
         this.y = y;
         this.direcaoX = direcaoX;
@@ -119,6 +122,7 @@ public class Projetil extends Thread {
         this.alturaTela = alturaTela;
         this.jogo = jogo;
         this.lado = lado;
+        this.alvoReservado = alvoReservado;
         this.ativo = true;
     }
 
@@ -131,6 +135,8 @@ public class Projetil extends Thread {
                 mover();
                 if (foraDosTela()) {
                     ativo = false;
+                    // Tiro ERROU — liberar reserva para outro canhão tentar
+                    jogo.liberarAlvo(alvoReservado);
                     break;
                 }
                 verificarColisoes();
@@ -138,6 +144,7 @@ public class Projetil extends Thread {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 ativo = false;
+                jogo.liberarAlvo(alvoReservado);
             }
         }
     }
@@ -183,6 +190,8 @@ public class Projetil extends Thread {
                 if (alvo.isAtivo() && collide(alvo)) {
                     alvo.setAtivo(false);
                     this.ativo = false;
+                    // Tiro ACERTOU — limpar reserva (alvo destruído)
+                    jogo.liberarAlvo(alvo);
                     break;
                 }
             }

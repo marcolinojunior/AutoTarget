@@ -87,8 +87,6 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
     // ── Views ────────────────────────────────────────────────────
     private GameSurfaceView gameSurfaceView;
     private Button btnIniciar;
-    private Button btnCanhaoEsquerdo;
-    private Button btnCanhaoDireito;
     private TextView tvPontuacao;
     private TextView tvEstado;
     private TextView tvAlvosAtivos;
@@ -124,8 +122,6 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
 
         FrameLayout container = findViewById(R.id.gameContainer);
         btnIniciar = findViewById(R.id.btnIniciar);
-        btnCanhaoEsquerdo = findViewById(R.id.btnCanhaoEsquerdo);
-        btnCanhaoDireito = findViewById(R.id.btnCanhaoDireito);
         tvPontuacao = findViewById(R.id.tvPontuacao);
         tvEstado = findViewById(R.id.tvEstado);
         tvAlvosAtivos = findViewById(R.id.tvAlvosAtivos);
@@ -160,6 +156,9 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
                         reiniciarJogo();
                     }
                     jogo.iniciar();
+                    Toast.makeText(this,
+                            "Toque no lado esquerdo para posicionar seus canhões!",
+                            Toast.LENGTH_LONG).show();
                 }
                 atualizarBotaoIniciar();
             } catch (JogoException e) {
@@ -167,63 +166,6 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
                 Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
-
-        // Canhão Esquerdo
-        btnCanhaoEsquerdo.setOnClickListener(v -> adicionarCanhaoNoLado(Lado.ESQUERDO));
-
-        // Canhão Direito (Desabilitado para o usuário, IA controla)
-        btnCanhaoDireito.setText("Canhões DIR (IA)");
-        btnCanhaoDireito.setEnabled(false);
-        // btnCanhaoDireito.setOnClickListener(v -> adicionarCanhaoNoLado(Lado.DIREITO));
-    }
-
-    /**
-     * Adiciona um canhão no lado especificado, posicionado automaticamente
-     * na metade correspondente da tela em layout de grid.
-     */
-    private void adicionarCanhaoNoLado(Lado lado) {
-        try {
-            int largura = gameSurfaceView.getWidth();
-            int altura = gameSurfaceView.getHeight();
-
-            if (largura <= 0 || altura <= 0) {
-                Toast.makeText(this, "Aguarde o canvas carregar", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            float meioX = largura / 2f;
-            int colunas = 3;
-            int count;
-            float baseX;
-
-            if (lado == Lado.ESQUERDO) {
-                count = canhaoCountEsq;
-                // Posicionar na metade esquerda
-                int col = count % colunas;
-                int row = count / colunas;
-                float espaco = meioX / (colunas + 1);
-                baseX = espaco * (col + 1);
-                float y = altura - 80f - (row * 70f);
-
-                jogo.adicionarCanhao(baseX, y, Lado.ESQUERDO);
-                canhaoCountEsq++;
-                Toast.makeText(this, "Canhão ESQ #" + canhaoCountEsq, Toast.LENGTH_SHORT).show();
-            } else {
-                count = canhaoCountDir;
-                int col = count % colunas;
-                int row = count / colunas;
-                float espaco = meioX / (colunas + 1);
-                baseX = meioX + espaco * (col + 1);
-                float y = altura - 80f - (row * 70f);
-
-                jogo.adicionarCanhao(baseX, y, Lado.DIREITO);
-                canhaoCountDir++;
-                Toast.makeText(this, "Canhão DIR #" + canhaoCountDir, Toast.LENGTH_SHORT).show();
-            }
-        } catch (JogoException e) {
-            Log.w(TAG, "Erro ao adicionar canhão", e);
-            Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
-        }
     }
 
     private void reiniciarJogo() {
@@ -231,8 +173,6 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
         jogo.setListener(this);
         jogo.setDimensoesTela(gameSurfaceView.getWidth(), gameSurfaceView.getHeight());
         gameSurfaceView.setJogo(jogo);
-        canhaoCountEsq = 0;
-        canhaoCountDir = 0;
 
         tvPontuacao.setText(R.string.pontuacao_inicial);
         tvAlvosAtivos.setText(R.string.alvos_ativos_inicial);
@@ -299,12 +239,10 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
                     .setTitle("🎯 Fim de Jogo!")
                     .setMessage(
                             vencedorStr + "\n\n" +
-                            "Esquerdo: " + pontEsq + " pontos\n" +
-                            "Direito: " + pontDir + " pontos\n\n" +
+                            "Jogador: " + pontEsq + " pontos\n" +
+                            "IA: " + pontDir + " pontos\n\n" +
                             "Tempo: " + tempoTotal + "s\n" +
-                            "Reconciliações: " + reconciliacoes + "\n" +
-                            "Canhões ESQ: " + canhaoCountEsq +
-                            " | DIR: " + canhaoCountDir + "\n\n" +
+                            "Reconciliações: " + reconciliacoes + "\n\n" +
                             "Resultado salvo no Firestore ✓")
                     .setPositiveButton("Jogar Novamente", (d, w) -> reiniciarJogo())
                     .setNegativeButton("Fechar", null)

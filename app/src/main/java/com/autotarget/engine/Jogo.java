@@ -102,6 +102,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -149,6 +150,14 @@ public class Jogo {
     private final Object listLock = new Object();
 
     private final Object collisionLock = new Object();
+
+    /**
+     * Sistema de Reserva de Alvos (AV2 — Coordenação de Disparos).
+     * Mapeia Alvo → Canhao. Cada alvo só pode ser mirando por um canhão por vez.
+     * Quando o tiro erra (projétil sai da tela), a reserva é liberada.
+     * Quando o alvo é destruído, a reserva é limpa automaticamente.
+     */
+    private final ConcurrentHashMap<Alvo, Canhao> reservasAlvos = new ConcurrentHashMap<>();
 
     /** Pontuação de cada lado. */
     private volatile int pontuacaoEsquerdo;
@@ -445,6 +454,125 @@ public class Jogo {
         }
     }
 
+    /**
+     * Conta quantos canhões ativos existem num dado lado.
+     * Usado pelo Canhao.run() para recalcular penalidade dinâmica
+     * antes de cada disparo (Fase 1 — AV2 §6.2.2-b).
+     *
+     * @param lado lado a consultar
+     * @return número de canhões ativos nesse lado
+     */
+    public int contarCanhoesAtivos(Lado lado) {
+        CopyOnWriteArrayList<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
+        int count = 0;
+        for (Canhao c : lista) {
+            if (c.isAtivo()) count++;
+        }
+        return count;
+    }
+
+    /**
+     * Remove um canhão específico de forma atômica e segura.
+     * Usado pela ReconciliacaoThread (IA) para desmontar canhões
+     * de baixa utilidade marginal (Fase 2 — AV2 §6.2.2-e).
+     *
+     * @param canhao o canhão a ser removido
+     */
+    public void removerCanhao(Canhao canhao) {
+        if (canhao == null) return;
+        canhao.pararCanhao();
+        canhao.interrupt();
+        synchronized (listLock) {
+            if (canhao.getLado() == Lado.ESQUERDO) {
+                canhoesEsquerdo.remove(canhao);
+            } else {
+                canhoesDireito.remove(canhao);
+            }
+        }
+        Log.i("Jogo", "Canhão removido do lado " + canhao.getLado()
+                + " — restam " + contarCanhoesAtivos(canhao.getLado()) + " ativos");
+    }
+
+    /**
+     * Retorna a energia atual de um dado lado.
+     * @param lado o lado a consultar
+     * @return energia atual
+     */
+    public float getEnergia(Lado lado) {
+        return (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
+    }
+
+    // ── Sistema de Reserva de Alvos (Coordenação de Disparos) ────
+
+    /**
+     * Reserva o alvo mais próximo disponível (não reservado por outro canhão)
+     * para o canhão solicitante. Retorna o alvo reservado, ou null se não
+     * houver alvos livres.
+     *
+     * Regra: cada alvo só pode ser alvo de UM canhão por vez.
+     * Somente quando o tiro erra (projétil sai da tela) a reserva é liberada
+     * e outro canhão pode mirar nesse alvo.
+     *
+     * @param canhao o canhão que está solicitando um alvo
+     * @return o alvo reservado, ou null
+     */
+    public Alvo reservarAlvo(Canhao canhao) {
+        // Limpar reservas de alvos já destruídos
+        limparReservasInvalidas();
+
+        CopyOnWriteArrayList<Alvo> listaAlvos =
+                (canhao.getLado() == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+
+        Alvo melhor = null;
+        float menorDist = Float.MAX_VALUE;
+
+        for (Alvo alvo : listaAlvos) {
+            if (!alvo.isAtivo()) continue;
+
+            // Verificar se já está reservado por OUTRO canhão
+            Canhao dono = reservasAlvos.get(alvo);
+            if (dono != null && dono != canhao && dono.isAtivo()) {
+                continue; // Alvo já comprometido por outro canhão
+            }
+
+            float dist = Alvo.calcularDistancia(canhao.getX(), canhao.getY(),
+                    alvo.getX(), alvo.getY());
+            if (dist < menorDist) {
+                menorDist = dist;
+                melhor = alvo;
+            }
+        }
+
+        if (melhor != null) {
+            reservasAlvos.put(melhor, canhao);
+        }
+
+        return melhor;
+    }
+
+    /**
+     * Libera a reserva de um alvo específico, permitindo que outro
+     * canhão possa mirá-lo. Chamado pelo Projétil quando ele erra
+     * (sai da tela sem acertar).
+     *
+     * @param alvo o alvo cuja reserva deve ser liberada
+     */
+    public void liberarAlvo(Alvo alvo) {
+        if (alvo != null) {
+            reservasAlvos.remove(alvo);
+        }
+    }
+
+    /**
+     * Remove reservas de alvos que já foram destruídos ou cujo canhão
+     * dono já não está ativo. Chamado automaticamente antes de cada
+     * nova reserva para manter a tabela limpa.
+     */
+    private void limparReservasInvalidas() {
+        reservasAlvos.entrySet().removeIf(entry ->
+                !entry.getKey().isAtivo() || !entry.getValue().isAtivo());
+    }
+
     // ── Penalidade de canhões ────────────────────────────────────
 
     /**
@@ -586,17 +714,67 @@ public class Jogo {
         if (destruidos > 0) {
             synchronized (listLock) {
                 for (Alvo alvo : alvosEsquerdo) {
-                    if (!alvo.isAtivo()) { pontuacaoEsquerdo++; alvosEsquerdo.remove(alvo); }
+                    if (!alvo.isAtivo()) {
+                        pontuacaoEsquerdo += calcularPontosAbate(alvo);
+                        energiaEsquerdo = Math.min(ENERGIA_MAXIMA,
+                                energiaEsquerdo + calcularEnergiaRegenerada(alvo));
+                        alvosEsquerdo.remove(alvo);
+                    }
                 }
                 for (Alvo alvo : alvosDireito) {
-                    if (!alvo.isAtivo()) { pontuacaoDireito++; alvosDireito.remove(alvo); }
+                    if (!alvo.isAtivo()) {
+                        pontuacaoDireito += calcularPontosAbate(alvo);
+                        energiaDireito = Math.min(ENERGIA_MAXIMA,
+                                energiaDireito + calcularEnergiaRegenerada(alvo));
+                        alvosDireito.remove(alvo);
+                    }
                 }
             }
             notificarPontuacao();
+            notificarEnergia();
         }
 
         notificarAlvosAtivos();
         return destruidos;
+    }
+
+    // ── Pontuação com Penalidade Temporal ─────────────────────────
+
+    /**
+     * Calcula pontos de abate com bônus/penalidade temporal.
+     * 
+     * Abate rápido (<2s)  → 5 pontos (posicionamento perfeito)
+     * Abate médio  (<4s)  → 3 pontos (posicionamento aceitável)
+     * Abate lento  (<7s)  → 1 ponto  (penalidade por demora)
+     * Abate muito lento (>7s) → 0 pontos (falha total)
+     *
+     * @param alvo o alvo destruído
+     * @return pontos a adicionar
+     */
+    private int calcularPontosAbate(Alvo alvo) {
+        long idadeMs = alvo.getIdadeMs();
+        if (idadeMs < 2000) return 5;
+        if (idadeMs < 4000) return 3;
+        if (idadeMs < 7000) return 1;
+        return 0; // Penalidade máxima: 0 pontos
+    }
+
+    /**
+     * Calcula energia regenerada ao abater um alvo.
+     * Quanto mais rápido o abate, mais energia é devolvida.
+     * Isso incentiva a IA a se arriscar adicionando mais canhões:
+     * mais canhões → abates mais rápidos → mais energia regenerada →
+     * compensa o custo extra dos canhões.
+     *
+     * @param alvo o alvo destruído
+     * @return energia a regenerar
+     */
+    private float calcularEnergiaRegenerada(Alvo alvo) {
+        long idadeMs = alvo.getIdadeMs();
+        if (idadeMs < 2000) return 5f;  // Abate ultra-rápido: +5 energia
+        if (idadeMs < 4000) return 3f;  // Abate médio: +3 energia
+        if (idadeMs < 7000) return 1f;  // Abate lento: +1 energia
+        return 0f;                      // Muito lento: sem regen
     }
 
     // ── Helpers ──────────────────────────────────────────────────

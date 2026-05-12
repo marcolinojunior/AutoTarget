@@ -96,7 +96,7 @@ public class ProjetilTest {
 
         // Projétil na mesma posição do alvo → colisão
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
 
         assertTrue("Deveria detectar colisão", projetil.collide(alvo));
     }
@@ -108,7 +108,7 @@ public class ProjetilTest {
 
         // Projétil muito longe → sem colisão
         Projetil projetil = new Projetil(10, 10, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
 
         assertFalse("Não deveria detectar colisão", projetil.collide(alvo));
     }
@@ -122,7 +122,7 @@ public class ProjetilTest {
         // Projétil (raio 5) exatamente no limite: distância = raioAlvo + raioProjetil = 25
         float distanciaLimite = 20f + Projetil.getRaio(); // 25
         Projetil projetilLimite = new Projetil(100 + distanciaLimite, 100, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
 
         // Colisão exata na fronteira
         assertTrue("Deveria detectar colisão no limite",
@@ -134,7 +134,7 @@ public class ProjetilTest {
     @Test
     public void testMovimento() {
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
 
         float xInicial = projetil.getX();
         projetil.mover();
@@ -148,7 +148,7 @@ public class ProjetilTest {
         // Direção normalizada 45°
         float dir = (float) (1 / Math.sqrt(2));
         Projetil projetil = new Projetil(0, 0, dir, dir, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
 
         projetil.mover();
 
@@ -162,14 +162,14 @@ public class ProjetilTest {
     @Test
     public void testProjetilCriadoAtivo() {
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
         assertTrue(projetil.isAtivo());
     }
 
     @Test
     public void testProjetilEhThread() {
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
-                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO);
+                alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
         assertTrue("Projetil deve ser uma Thread", projetil instanceof Thread);
     }
 }
