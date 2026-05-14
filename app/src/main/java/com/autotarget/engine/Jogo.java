@@ -90,6 +90,7 @@ import com.autotarget.util.Cryptography;
 import com.autotarget.util.DataReconciliation;
 import com.autotarget.util.QuadTree;
 import com.autotarget.util.RMAAnalysis;
+import com.autotarget.util.ReconciliationLog;
 import com.autotarget.service.FirebaseIOThread;
 import com.autotarget.service.ReconciliacaoThread;
 import com.autotarget.service.SensorThread;
@@ -214,6 +215,7 @@ public class Jogo {
         void onEnergiaAtualizada(float energiaEsq, float energiaDir);
         void onPartidaEncerrada(int pontEsq, int pontDir, int tempoTotal,
                                 int reconciliacoes, Lado vencedor);
+        void onRelatorioReconciliacao(String relatorio);
     }
 
     // ── Construtor ───────────────────────────────────────────────
@@ -256,15 +258,19 @@ public class Jogo {
         tempoRestante = DURACAO_PARTIDA_SEGUNDOS;
         reconciliacoesRealizadas = 0;
         timestampInicio = System.currentTimeMillis();
+        ReconciliationLog.getInstance().reset();
 
         // Timer de spawn de alvos
         spawnTimer = new Timer("SpawnAlvoTimer", true);
-        spawnTimer.scheduleAtFixedRate(new TimerTask() {
+        spawnTimer.schedule(new TimerTask() {
             @Override
             public void run() {
-                if (estado == Estado.RODANDO) spawnarAlvo();
+                if (estado == Estado.RODANDO) {
+                    spawnarAlvo();
+                    agendarProximoSpawn();
+                }
             }
-        }, 0, INTERVALO_SPAWN_ALVO);
+        }, 0);
 
         // Timer principal: contagem regressiva + energia
         gameTimer = new Timer("GameTimer", true);
@@ -409,12 +415,16 @@ public class Jogo {
                     reconciliacoesRealizadas, vencedorStr, dados);
         }
 
+        // Gerar relatório de reconciliação
+        String relatorio = ReconciliationLog.getInstance().gerarRelatorio();
+
         notificarEstado();
         notificarTempo();
 
         if (listener != null) {
             listener.onPartidaEncerrada(pontuacaoEsquerdo, pontuacaoDireito,
                     (int) tempoTotal, reconciliacoesRealizadas, vencedor);
+            listener.onRelatorioReconciliacao(relatorio);
         }
     }
 
@@ -643,24 +653,54 @@ public class Jogo {
     private void spawnarAlvo() {
         if (larguraTela <= 0 || alturaTela <= 0) return;
 
-        float x = RAIO_ALVO + random.nextFloat() * (larguraTela - 2 * RAIO_ALVO);
-        float y = RAIO_ALVO + random.nextFloat() * (alturaTela - 2 * RAIO_ALVO);
+        int quantidadeSpawns = (tempoRestante <= 30) ? 4 : 1;
 
-        Alvo alvo;
-        if (random.nextBoolean()) {
-            alvo = new AlvoComum(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
-        } else {
-            alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
+        for (int i = 0; i < quantidadeSpawns; i++) {
+            float x = RAIO_ALVO + random.nextFloat() * (larguraTela - 2 * RAIO_ALVO);
+            float y = RAIO_ALVO + random.nextFloat() * (alturaTela - 2 * RAIO_ALVO);
+
+            Alvo alvo;
+            if (random.nextBoolean()) {
+                alvo = new AlvoComum(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
+            } else {
+                alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
+            }
+
+            Lado lado = Lado.determinar(x, larguraTela);
+            if (lado == Lado.ESQUERDO) {
+                alvosEsquerdo.add(alvo);
+            } else {
+                alvosDireito.add(alvo);
+            }
+
+            ReconciliationLog.getInstance().logSpawn(x, y,
+                    alvo.getClass().getSimpleName(), lado.name());
+
+            alvo.start();
         }
+    }
 
-        Lado lado = Lado.determinar(x, larguraTela);
-        if (lado == Lado.ESQUERDO) {
-            alvosEsquerdo.add(alvo);
-        } else {
-            alvosDireito.add(alvo);
+    private void agendarProximoSpawn() {
+        if (estado != Estado.RODANDO || spawnTimer == null) return;
+
+        // Calcula o intervalo baseado no tempo restante: 
+        // Vai de INTERVALO_SPAWN_ALVO (ex: 3000ms) até 500ms no final da partida
+        float proporcao = Math.max(0, (float) tempoRestante / DURACAO_PARTIDA_SEGUNDOS);
+        long intervalo = 500 + (long) ((INTERVALO_SPAWN_ALVO - 500) * proporcao);
+
+        try {
+            spawnTimer.schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    if (estado == Estado.RODANDO) {
+                        spawnarAlvo();
+                        agendarProximoSpawn();
+                    }
+                }
+            }, intervalo);
+        } catch (Exception e) {
+            Log.e("Jogo", "Erro ao agendar spawn de alvo", e);
         }
-
-        alvo.start();
     }
 
     // ── Verificação de colisões (por lado) ───────────────────────
@@ -771,10 +811,10 @@ public class Jogo {
      */
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
-        if (idadeMs < 2000) return 5f;  // Abate ultra-rápido: +5 energia
-        if (idadeMs < 4000) return 3f;  // Abate médio: +3 energia
-        if (idadeMs < 7000) return 1f;  // Abate lento: +1 energia
-        return 0f;                      // Muito lento: sem regen
+        if (idadeMs < 2000) return 15f; // Abate ultra-rápido: compensa ~15s de 1 canhão
+        if (idadeMs < 4000) return 10f; // Abate médio: compensa ~10s de 1 canhão
+        if (idadeMs < 7000) return 5f;  // Abate lento: compensa ~5s de 1 canhão
+        return 2f;                      // Muito lento: recuperação mínima de segurança
     }
 
     // ── Helpers ──────────────────────────────────────────────────

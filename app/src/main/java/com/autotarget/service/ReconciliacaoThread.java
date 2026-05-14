@@ -42,6 +42,7 @@ import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.util.DataReconciliation;
 import com.autotarget.util.RMAAnalysis;
+import com.autotarget.util.ReconciliationLog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -228,6 +229,11 @@ public class ReconciliacaoThread extends Thread {
             Log.i(TAG, "Reconciliação #" + reconciliacoesRealizadas + " concluída: "
                     + resultados.length + " alvos");
 
+            // ── LOG DE AUDITORIA ────────────────────────────────
+            float[] verdadeiroX = sensorThread.getVerdadeiroPosX();
+            float[] verdadeiroY = sensorThread.getVerdadeiroPosY();
+            logReconciliationResults(resultados, canhoesX, canhoesY, mediaD, verdadeiroX, verdadeiroY, N);
+
             // ── OTIMIZAÇÃO GREEDY (refino fino via U(N)) ────────
             avaliarCustoBeneficio(canhoesSnapshot, resultados);
 
@@ -288,6 +294,9 @@ public class ReconciliacaoThread extends Thread {
                 Log.i(TAG, String.format(
                         "PRESSÃO TÁTICA: %d alvos / %d canhões (ratio=%.1f) → ADICIONANDO em (%.0f,%.0f)",
                         nAlvosDir, nCanhoesDir, ratio, novoX, novoY));
+                ReconciliationLog.getInstance().logAIDecision(
+                        "ADICIONAR", "Pressão tática (ratio=" + String.format("%.1f", ratio) + ")",
+                        novoX, novoY, 0, 0);
                 listener.onSugestaoAdicionarCanhao(Lado.DIREITO, novoX, novoY);
             }
         }
@@ -302,6 +311,9 @@ public class ReconciliacaoThread extends Thread {
             if (canhoesDoLado.size() > 2) {
                 Canhao ultimo = canhoesDoLado.get(canhoesDoLado.size() - 1);
                 Log.i(TAG, "EXCESSO: 0 alvos, removendo canhão excedente");
+                ReconciliationLog.getInstance().logAIDecision(
+                        "REMOVER", "Excesso: 0 alvos ativos",
+                        ultimo.getX(), ultimo.getY(), 0, 0);
                 jogo.removerCanhao(ultimo);
             }
         }
@@ -315,6 +327,9 @@ public class ReconciliacaoThread extends Thread {
             if (!canhoesDoLado.isEmpty()) {
                 Canhao ultimo = canhoesDoLado.get(canhoesDoLado.size() - 1);
                 Log.i(TAG, String.format("ENERGIA CRÍTICA (%.0f) → removendo canhão", energiaDir));
+                ReconciliationLog.getInstance().logAIDecision(
+                        "REMOVER", "Energia crítica (" + String.format("%.0f", energiaDir) + ")",
+                        ultimo.getX(), ultimo.getY(), 0, 0);
                 jogo.removerCanhao(ultimo);
             }
         }
@@ -451,6 +466,9 @@ public class ReconciliacaoThread extends Thread {
                 Log.i(TAG, String.format(
                         "IA ADICIONAR canhão DIR em (%.0f, %.0f) ΔU=%.3f energia=%.0f",
                         cx, cy, ganhoMarginal, energiaDir));
+                ReconciliationLog.getInstance().logAIDecision(
+                        "ADICIONAR", "Greedy U(N+1)-U(N)=" + String.format("%.3f", ganhoMarginal),
+                        cx, cy, uAtual, uMais1);
                 listener.onSugestaoAdicionarCanhao(lado, cx, cy);
                 return; // Não remover no mesmo ciclo
             }
@@ -474,6 +492,9 @@ public class ReconciliacaoThread extends Thread {
                     Log.i(TAG, String.format(
                             "IA REMOVER canhão DIR (perda=%.3f, energia=%.0f, critica=%s)",
                             perdaMarginal, energiaDir, energiaCritica));
+                    ReconciliationLog.getInstance().logAIDecision(
+                            "REMOVER", "Greedy U(N)-U(N-1)=" + String.format("%.3f", perdaMarginal),
+                            maisOcioso.getX(), maisOcioso.getY(), uAtual, uMenos1);
                     jogo.removerCanhao(maisOcioso);
                 }
             }
@@ -665,4 +686,42 @@ public class ReconciliacaoThread extends Thread {
 
     public void setLarguraTela(int largura) { this.larguraTela = largura; }
     public void setAlturaTela(int altura) { this.alturaTela = altura; }
+
+    // ── LOG DE AUDITORIA PARA PROVA MATEMÁTICA ───────────────────
+
+    /**
+     * Registra os resultados de uma reconciliação EJML no ReconciliationLog.
+     * Compara distâncias brutas vs. reconciliadas, posição estimada vs. real,
+     * e calcula a norma do resíduo da restrição (||Aŷ|| ≈ 0).
+     */
+    private void logReconciliationResults(
+            DataReconciliation.ReconciliationResult[] resultados,
+            float[] canhoesX, float[] canhoesY,
+            float[][] mediaD,
+            float[] verdadeiroX, float[] verdadeiroY,
+            int N) {
+
+        boolean usouEJML = (N >= 4);
+
+        for (int i = 0; i < resultados.length; i++) {
+            DataReconciliation.ReconciliationResult r = resultados[i];
+
+            // Distâncias brutas (média)
+            float[] brutas = (i < mediaD.length) ? mediaD[i] : new float[0];
+
+            // Posição real sincronizada do momento do burst do radar
+            float realX = r.x, realY = r.y; // fallback
+            if (verdadeiroX != null && verdadeiroY != null && i < verdadeiroX.length && i < verdadeiroY.length) {
+                realX = verdadeiroX[i];
+                realY = verdadeiroY[i];
+            }
+
+            ReconciliationLog.getInstance().logReconciliation(
+                    N, resultados.length,
+                    brutas, r.distanciasReconciliadas,
+                    r.x, r.y, realX, realY,
+                    canhoesX, canhoesY,
+                    r.normA_yHat, usouEJML);
+        }
+    }
 }

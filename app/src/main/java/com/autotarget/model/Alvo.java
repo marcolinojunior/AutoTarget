@@ -186,6 +186,8 @@ public abstract class Alvo extends Thread {
     public float getY() { return y; }
     public float getRaio() { return raio; }
     public float getVelocidade() { return velocidade; }
+    public float getDirecaoX() { return direcaoX; }
+    public float getDirecaoY() { return direcaoY; }
     public boolean isAtivo() { return ativo; }
 
     public void setAtivo(boolean ativo) { this.ativo = ativo; }

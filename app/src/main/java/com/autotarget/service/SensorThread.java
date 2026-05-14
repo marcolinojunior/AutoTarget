@@ -54,6 +54,8 @@ public class SensorThread extends Thread {
     private volatile float[] leiturasPosX;
     private volatile float[] leiturasPosY;
     private volatile float[] leiturasVelocidade;
+    private volatile float[] verdadeiroPosX;
+    private volatile float[] verdadeiroPosY;
     private volatile int quantidadeAlvosColetados;
 
     /**
@@ -132,13 +134,16 @@ public class SensorThread extends Thread {
         float[] localPosX;
         float[] localPosY;
         float[] localVel;
+        float[] localVerdadeiroX;
+        float[] localVerdadeiroY;
         int localCount;
-        float[][] localDistancias = null;
+        List<float[]> alvosAtivosPos = new ArrayList<>();
+        List<Canhao> canhoesAtuais = null;
 
         synchronized (collisionLock) {
             // Contar alvos ativos
             List<Alvo> alvosAtuais = jogo.getAllAlvos();
-            List<Canhao> canhoesAtuais = jogo.getAllCanhoes();
+            canhoesAtuais = jogo.getAllCanhoes();
             
             int count = 0;
             for (Alvo a : alvosAtuais) {
@@ -148,9 +153,11 @@ public class SensorThread extends Thread {
             localPosX = new float[count];
             localPosY = new float[count];
             localVel = new float[count];
+            localVerdadeiroX = new float[count];
+            localVerdadeiroY = new float[count];
 
             // Coletar posições dos alvos ativos para distâncias
-            List<float[]> alvosAtivosPos = new ArrayList<>();
+            alvosAtivosPos.clear();
 
             int i = 0;
             for (Alvo a : alvosAtuais) {
@@ -166,28 +173,13 @@ public class SensorThread extends Thread {
                 localPosY[i] = realY * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
                 localVel[i] = realV * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
 
+                localVerdadeiroX[i] = realX;
+                localVerdadeiroY[i] = realY;
+
                 alvosAtivosPos.add(new float[]{realX, realY});
                 i++;
             }
             localCount = i;
-
-            // Calcular distâncias d_ij entre cada alvo i e canhão j
-            int numCanhoes = canhoesAtuais.size();
-            if (numCanhoes > 0 && localCount > 0) {
-                localDistancias = new float[localCount][numCanhoes];
-                for (int ai = 0; ai < localCount && ai < alvosAtivosPos.size(); ai++) {
-                    float[] apos = alvosAtivosPos.get(ai);
-                    for (int cj = 0; cj < numCanhoes; cj++) {
-                        Canhao c = canhoesAtuais.get(cj);
-                        float dx = apos[0] - c.getX();
-                        float dy = apos[1] - c.getY();
-                        // Distância com ruído
-                        float dist = (float) Math.sqrt(dx * dx + dy * dy);
-                        localDistancias[ai][cj] = dist
-                                * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
-                    }
-                }
-            }
         }
 
         // ── Fase 2: publicar dados e notificar sob sensorLock ──
@@ -195,13 +187,31 @@ public class SensorThread extends Thread {
             leiturasPosX = localPosX;
             leiturasPosY = localPosY;
             leiturasVelocidade = localVel;
+            verdadeiroPosX = localVerdadeiroX;
+            verdadeiroPosY = localVerdadeiroY;
             quantidadeAlvosColetados = localCount;
 
-            // Adicionar ao buffer histórico de distâncias
-            if (localDistancias != null) {
-                historicoDistancias.addLast(localDistancias);
-                while (historicoDistancias.size() > TAMANHO_HISTORICO) {
-                    historicoDistancias.removeFirst();
+            int numCanhoes = canhoesAtuais.size();
+            if (numCanhoes > 0 && localCount > 0) {
+                // Limpar histórico antigo e gerar 10 amostras instantâneas (Burst Radar)
+                // Isso garante que a geometria do alvo é consistente para a reconciliação (alvo não se moveu durante o burst)
+                historicoDistancias.clear();
+
+                for (int burst = 0; burst < TAMANHO_HISTORICO; burst++) {
+                    float[][] burstDistancias = new float[localCount][numCanhoes];
+
+                    for (int ai = 0; ai < localCount && ai < alvosAtivosPos.size(); ai++) {
+                        float[] apos = alvosAtivosPos.get(ai);
+                        for (int cj = 0; cj < numCanhoes; cj++) {
+                            Canhao c = canhoesAtuais.get(cj);
+                            float dx = apos[0] - c.getX();
+                            float dy = apos[1] - c.getY();
+                            // Distância com ruído proporcional individual por amostra
+                            float distReal = (float) Math.sqrt(dx * dx + dy * dy);
+                            burstDistancias[ai][cj] = distReal * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
+                        }
+                    }
+                    historicoDistancias.addLast(burstDistancias);
                 }
             }
 
@@ -285,6 +295,18 @@ public class SensorThread extends Thread {
     public int getHistoricoCount() {
         synchronized (sensorLock) {
             return historicoDistancias.size();
+        }
+    }
+
+    public float[] getVerdadeiroPosX() {
+        synchronized (sensorLock) {
+            return verdadeiroPosX;
+        }
+    }
+
+    public float[] getVerdadeiroPosY() {
+        synchronized (sensorLock) {
+            return verdadeiroPosY;
         }
     }
 

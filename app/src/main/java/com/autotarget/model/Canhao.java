@@ -34,6 +34,7 @@ package com.autotarget.model;
 
 import android.util.Log;
 import com.autotarget.util.RMAAnalysis;
+import com.autotarget.util.ReconciliationLog;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -164,20 +165,64 @@ public class Canhao extends Thread {
             return; // Nenhum alvo livre disponível
         }
 
-        float dx = alvoReservado.getX() - this.x;
-        float dy = alvoReservado.getY() - this.y;
-        float distancia = Alvo.calcularDistancia(this.x, this.y,
-                alvoReservado.getX(), alvoReservado.getY());
+        // Dados do "sensor" (estado atual do alvo)
+        float tX = alvoReservado.getX();
+        float tY = alvoReservado.getY();
+        float tVel = alvoReservado.getVelocidade();
+        float tDirX = alvoReservado.getDirecaoX();
+        float tDirY = alvoReservado.getDirecaoY();
 
-        if (distancia < 0.001f) {
+        // Velocidade do alvo em pixels/ms (alvo atualiza a cada 30ms)
+        float vTargetX = (tDirX * tVel) / 30f;
+        float vTargetY = (tDirY * tVel) / 30f;
+        
+        // Velocidade do projétil em pixels/ms (projétil atualiza a cada 16ms)
+        float vProj = VELOCIDADE_PROJETIL / 16f;
+
+        float dx = tX - this.x;
+        float dy = tY - this.y;
+
+        // Cálculo da interceptação (previsão da trajetória)
+        // (dx + vTargetX * t)^2 + (dy + vTargetY * t)^2 = (vProj * t)^2
+        // A*t^2 + B*t + C = 0
+        float a = vTargetX * vTargetX + vTargetY * vTargetY - vProj * vProj;
+        float b = 2 * (dx * vTargetX + dy * vTargetY);
+        float c = dx * dx + dy * dy;
+
+        float tempoInterceptacao = 0;
+        if (Math.abs(a) > 0.0001f) {
+            float delta = b * b - 4 * a * c;
+            if (delta >= 0) {
+                float t1 = (-b + (float) Math.sqrt(delta)) / (2 * a);
+                float t2 = (-b - (float) Math.sqrt(delta)) / (2 * a);
+                if (t1 > 0 && t2 > 0) tempoInterceptacao = Math.min(t1, t2);
+                else if (t1 > 0) tempoInterceptacao = t1;
+                else if (t2 > 0) tempoInterceptacao = t2;
+            }
+        }
+
+        // Posição futura prevista para interceptação
+        float targetAimX = tX;
+        float targetAimY = tY;
+
+        if (tempoInterceptacao > 0) {
+            targetAimX = tX + vTargetX * tempoInterceptacao;
+            targetAimY = tY + vTargetY * tempoInterceptacao;
+        }
+
+        float dxAim = targetAimX - this.x;
+        float dyAim = targetAimY - this.y;
+        float distAim = (float) Math.sqrt(dxAim * dxAim + dyAim * dyAim);
+
+        if (distAim < 0.001f) {
             return;
         }
 
-        float dirX = dx / distancia;
-        float dirY = dy / distancia;
+        float dirX = dxAim / distAim;
+        float dirY = dyAim / distAim;
 
         try {
-            this.angulo = (float) Math.toDegrees(Math.atan2(dy, dx));
+            this.angulo = (float) Math.toDegrees(Math.atan2(dyAim, dxAim));
         } catch (Exception e) {
             this.angulo = 0f;
         }
@@ -192,6 +237,11 @@ public class Canhao extends Thread {
             projeteis.add(projetil);
         }
         projetil.start();
+
+        // Log do disparo para auditoria de reconciliação
+        ReconciliationLog.getInstance().logShot(
+                this.x, this.y, tX, tY, targetAimX, targetAimY,
+                false, this.lado.name()); // hit é atualizado pelo Projetil
     }
 
     private void limparProjetisInativos() {

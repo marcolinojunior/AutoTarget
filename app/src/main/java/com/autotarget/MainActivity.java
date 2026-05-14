@@ -70,6 +70,7 @@ import com.autotarget.model.Lado;
 import com.autotarget.ui.BenchmarkActivity;
 import com.autotarget.ui.LoginActivity;
 import com.autotarget.ui.RankingActivity;
+import com.autotarget.ui.ReconciliationReportActivity;
 import com.autotarget.ui.TrlActivity;
 import com.google.firebase.auth.FirebaseAuth;
 
@@ -250,6 +251,15 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
                     .show();
 
             atualizarBotaoIniciar();
+        });
+    }
+
+    @Override
+    public void onRelatorioReconciliacao(String relatorio) {
+        uiHandler.post(() -> {
+            Intent intent = new Intent(this, ReconciliationReportActivity.class);
+            intent.putExtra(ReconciliationReportActivity.EXTRA_REPORT, relatorio);
+            startActivity(intent);
         });
     }
     // ── Menu ────────────────────────────────────────────────────

@@ -49,6 +49,7 @@
 package com.autotarget.model;
 
 import java.util.List;
+import com.autotarget.util.ReconciliationLog;
 
 /**
  * Projétil disparado por um canhão.
@@ -192,6 +193,10 @@ public class Projetil extends Thread {
                     this.ativo = false;
                     // Tiro ACERTOU — limpar reserva (alvo destruído)
                     jogo.liberarAlvo(alvo);
+                    // Log de acerto para auditoria
+                    ReconciliationLog.getInstance().logShot(
+                            this.x, this.y, alvo.getX(), alvo.getY(),
+                            this.x, this.y, true, this.lado.name());
                     break;
                 }
             }

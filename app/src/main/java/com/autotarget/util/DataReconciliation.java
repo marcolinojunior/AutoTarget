@@ -42,17 +42,22 @@ public class DataReconciliation {
      * Resultado da reconciliação para um alvo.
      */
     public static class ReconciliationResult {
-        /** Posição retificada X do alvo */
-        public final float x;
-        /** Posição retificada Y do alvo */
-        public final float y;
-        /** Distâncias reconciliadas a cada canhão */
+        public final float x, y;
         public final float[] distanciasReconciliadas;
+        public final double normA_yHat;
 
-        public ReconciliationResult(float x, float y, float[] distancias) {
+        public ReconciliationResult(float x, float y, float[] dist) {
             this.x = x;
             this.y = y;
-            this.distanciasReconciliadas = distancias;
+            this.distanciasReconciliadas = dist;
+            this.normA_yHat = 0;
+        }
+
+        public ReconciliationResult(float x, float y, float[] dist, double normA_yHat) {
+            this.x = x;
+            this.y = y;
+            this.distanciasReconciliadas = dist;
+            this.normA_yHat = normA_yHat;
         }
     }
 
@@ -84,35 +89,48 @@ public class DataReconciliation {
         }
 
         try {
-            // ── Passo 3: Construir Matriz M (N×3) ──────────────────
-            SimpleMatrix matM = new SimpleMatrix(N, 3);
-            double[] canhaoNormaSq = new double[N];
+            // ── Otimização de estabilidade: Transladar para o centroide ──
+            double cx = 0, cy = 0;
             for (int j = 0; j < N; j++) {
-                canhaoNormaSq[j] = canhoesX[j] * canhoesX[j] + canhoesY[j] * canhoesY[j];
-                matM.set(j, 0, 1.0);
-                matM.set(j, 1, -2.0 * canhoesX[j]);
-                matM.set(j, 2, -2.0 * canhoesY[j]);
+                cx += canhoesX[j];
+                cy += canhoesY[j];
+            }
+            cx /= N;
+            cy /= N;
+
+            float[] cX = new float[N];
+            float[] cY = new float[N];
+            for (int j = 0; j < N; j++) {
+                cX[j] = (float) (canhoesX[j] - cx);
+                cY[j] = (float) (canhoesY[j] - cy);
+            }
+
+            // ── Passo 3: Construir Matriz M ((N-1)×2) ──────────────────
+            int M_rows = N - 1;
+            SimpleMatrix matM = new SimpleMatrix(M_rows, 2);
+            double cx0 = cX[0];
+            double cy0 = cY[0];
+            for (int j = 1; j < N; j++) {
+                int r = j - 1;
+                matM.set(r, 0, 2.0 * (cX[j] - cx0));
+                matM.set(r, 1, 2.0 * (cY[j] - cy0));
             }
 
             // ── Passo 4: Espaço nulo esquerdo de M ─────────────────
-            // dim(null space esquerdo) = N - rank(M) = N - 3
-            SimpleMatrix C = computeLeftNullSpace(matM, N);
+            // dim(null space esquerdo) = M_rows - rank(M) = (N-1) - 2 = N - 3
+            SimpleMatrix C = computeLeftNullSpace(matM, M_rows);
             if (C == null) {
                 Log.w(TAG, "Canhões colineares — fallback para OLS direto");
                 return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
             }
 
-            // ── Pré-calcular (MᵀM)⁻¹Mᵀ para OLS ──────────────────
-            SimpleMatrix Mt = matM.transpose();
-            SimpleMatrix MtM_inv_Mt = Mt.mult(matM).invert().mult(Mt);
-
             // ── Reconciliar cada alvo independentemente ─────────────
             ReconciliationResult[] results = new ReconciliationResult[M];
 
             for (int i = 0; i < M; i++) {
-                results[i] = reconciliarAlvo(i, N, canhoesX, canhoesY,
-                        canhaoNormaSq, mediaDistancias[i], varDistancias[i],
-                        C, MtM_inv_Mt);
+                results[i] = reconciliarAlvo(i, N, cX, cY,
+                        mediaDistancias[i], varDistancias[i],
+                        C, matM, (float) cx, (float) cy);
             }
 
             Log.i(TAG, "Reconciliação concluída: " + M + " alvos processados");
@@ -127,32 +145,49 @@ public class DataReconciliation {
         }
     }
 
-    /**
-     * Reconcilia um alvo individual.
-     *
-     * Equação: ŷ_i = y_i - V_i·Cᵀ·(C·V_i·Cᵀ)⁻¹·C·y_i
-     */
     private ReconciliationResult reconciliarAlvo(
             int alvoIndex, int N,
             float[] canhoesX, float[] canhoesY,
-            double[] canhaoNormaSq,
             float[] mediaDist, float[] varDist,
-            SimpleMatrix C, SimpleMatrix MtM_inv_Mt) {
+            SimpleMatrix C, SimpleMatrix matM,
+            float offsetX, float offsetY) {
 
-        // ── Passo 1: Vetor y_i ──────────────────────────────────
-        double[] y_arr = new double[N];
-        for (int j = 0; j < N; j++) {
-            double dBar = mediaDist[j];
-            y_arr[j] = dBar * dBar - canhaoNormaSq[j];
+        int M_rows = N - 1;
+        // ── Passo 1 e 2: Vetor y_i e Matriz V_i ─────────────────
+        double[] y_arr = new double[M_rows];
+        double[][] V_arr = new double[M_rows][M_rows];
+
+        double cx0 = canhoesX[0];
+        double cy0 = canhoesY[0];
+        double d0 = mediaDist[0];
+        double var0 = varDist[0];
+        double d0_sq = d0 * d0;
+        double v0_sq = 4.0 * d0_sq * var0;
+        double norm0_sq = cx0 * cx0 + cy0 * cy0;
+
+        for (int j = 1; j < N; j++) {
+            int r = j - 1;
+            double cx_j = canhoesX[j];
+            double cy_j = canhoesY[j];
+            double dj = mediaDist[j];
+            double dj_sq = dj * dj;
+            double norm_j_sq = cx_j * cx_j + cy_j * cy_j;
+
+            y_arr[r] = d0_sq - dj_sq - norm0_sq + norm_j_sq;
         }
 
-        // ── Passo 2: Matriz V_i (diagonal) ──────────────────────
-        double[][] V_arr = new double[N][N];
-        for (int j = 0; j < N; j++) {
-            double dBar = mediaDist[j];
-            double sij2 = varDist[j];
-            double vij = (2.0 * dBar) * (2.0 * dBar) * sij2;
-            V_arr[j][j] = Math.max(vij, 1e-6); // Evitar zeros
+        // ── Matriz V_i (Covariância Densa da Transformação) ─────
+        for (int r = 0; r < M_rows; r++) {
+            for (int s = 0; s < M_rows; s++) {
+                if (r == s) {
+                    double dj = mediaDist[r + 1];
+                    double var_j = varDist[r + 1];
+                    double vj_sq = 4.0 * (dj * dj) * var_j;
+                    V_arr[r][s] = Math.max(v0_sq + vj_sq, 1e-6);
+                } else {
+                    V_arr[r][s] = v0_sq; // Covariância induzida pelo Canhão 0
+                }
+            }
         }
 
         // ── Passo 3: Converter Matriz de Restrição C -> A ───────
@@ -165,23 +200,46 @@ public class DataReconciliation {
 
         // ── Passo 5: Equação de reconciliação (CHAMADA EXIGIDA) ──
         double[] yHat_arr = reconcile(y_arr, V_arr, A_arr);
-        SimpleMatrix yHat = new SimpleMatrix(N, 1);
-        for (int j = 0; j < N; j++) yHat.set(j, 0, yHat_arr[j]);
+        SimpleMatrix yHat = new SimpleMatrix(M_rows, 1);
+        for (int j = 0; j < M_rows; j++) yHat.set(j, 0, yHat_arr[j]);
 
-        // ── Passo 6: Distâncias reconciliadas ───────────────────
-        float[] distReconciliadas = new float[N];
-        for (int j = 0; j < N; j++) {
-            double val = yHat.get(j, 0) + canhaoNormaSq[j];
-            distReconciliadas[j] = (float) Math.sqrt(Math.max(val, 0.0));
+        // ── Calcular ||A*yHat|| ─────────────────────────────────
+        SimpleMatrix matA = new SimpleMatrix(A_arr);
+        SimpleMatrix AyHat = matA.mult(yHat);
+        double normA_yHat = AyHat.normF();
+
+        // ── Passo 7: Posição WLS (Mínimos Quadrados Ponderados) ──
+        // [X̂, Ŷ]ᵀ = (MᵀWM)⁻¹MᵀW·ŷ
+        SimpleMatrix matV = new SimpleMatrix(V_arr);
+        SimpleMatrix W;
+        try {
+            W = matV.invert();
+        } catch (SingularMatrixException e) {
+            W = matV.pseudoInverse();
         }
 
-        // ── Passo 7: Posição OLS ────────────────────────────────
-        // [K̂, X̂, Ŷ]ᵀ = (MᵀM)⁻¹Mᵀ·ŷ
-        SimpleMatrix theta = MtM_inv_Mt.mult(yHat);
-        float xHat = (float) theta.get(1, 0);
-        float yHat_coord = (float) theta.get(2, 0);
+        SimpleMatrix Mt = matM.transpose();
+        SimpleMatrix MtWM = Mt.mult(W).mult(matM);
+        SimpleMatrix MtWM_inv;
+        try {
+            MtWM_inv = MtWM.invert();
+        } catch (SingularMatrixException e) {
+            MtWM_inv = MtWM.pseudoInverse();
+        }
 
-        return new ReconciliationResult(xHat, yHat_coord, distReconciliadas);
+        SimpleMatrix theta = MtWM_inv.mult(Mt).mult(W).mult(yHat);
+        float xHat = (float) theta.get(0, 0) + offsetX;
+        float yHat_coord = (float) theta.get(1, 0) + offsetY;
+
+        // ── Passo 8: Distâncias reconciliadas ───────────────────
+        float[] distReconciliadas = new float[N];
+        for (int j = 0; j < N; j++) {
+            double dx = xHat - (canhoesX[j] + offsetX);
+            double dy = yHat_coord - (canhoesY[j] + offsetY);
+            distReconciliadas[j] = (float) Math.sqrt(dx * dx + dy * dy);
+        }
+
+        return new ReconciliationResult(xHat, yHat_coord, distReconciliadas, normA_yHat);
     }
 
     /**
