@@ -189,6 +189,8 @@ public class BenchmarkActivity extends AppCompatActivity {
             resultadosTexto.add("Métricas de resposta observadas:");
             resultadosTexto.add(RMAAnalysis.getRuntimeMetricsReport());
 
+            exportarParaCSV(samples, RMAAnalysis.getRuntimeMetricsReport());
+
             updateResults();
             updateStatus("Benchmark concluído!");
 
@@ -254,6 +256,27 @@ public class BenchmarkActivity extends AppCompatActivity {
         }
 
         return totalNs / 1_000_000;
+    }
+
+    private void exportarParaCSV(List<BenchmarkSample> listSamples, String rmaMetrics) {
+        try {
+            java.io.File file = new java.io.File(getExternalFilesDir(null), "benchmark_report.csv");
+            java.io.FileWriter writer = new java.io.FileWriter(file);
+            writer.append("cores,elapsed_ms,speedup,speedup_teorico,p_estimado\n");
+            for (BenchmarkSample s : listSamples) {
+                writer.append(String.format(java.util.Locale.US, "%d,%d,%.3f,%.3f,%.3f\n",
+                        s.cores, s.elapsedMs, s.speedup, s.speedupTeorico, s.pEstimado));
+            }
+            writer.append("\n");
+            writer.append(rmaMetrics);
+            writer.flush();
+            writer.close();
+            android.util.Log.i("Benchmark", "Relatório CSV exportado para: " + file.getAbsolutePath());
+            resultadosTexto.add("\nRelatório salvo em: " + file.getAbsolutePath());
+        } catch (Exception e) {
+            android.util.Log.e("Benchmark", "Erro ao exportar CSV", e);
+            resultadosTexto.add("\nErro ao salvar CSV: " + e.getMessage());
+        }
     }
 
     private void updateStatus(String msg) {
