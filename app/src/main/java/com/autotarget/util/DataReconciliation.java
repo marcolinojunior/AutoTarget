@@ -30,6 +30,8 @@ import android.util.Log;
 
 import org.ejml.simple.SimpleMatrix;
 import org.ejml.data.SingularMatrixException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Reconciliação de dados estocásticos via álgebra linear (EJML).
@@ -37,6 +39,7 @@ import org.ejml.data.SingularMatrixException;
 public class DataReconciliation {
 
     private static final String TAG = "DataReconciliation";
+    private static final double LIMIAR_GEOMETRICO_FATOR = 0.85;
 
     /**
      * Resultado da reconciliação para um alvo.
@@ -190,11 +193,19 @@ public class DataReconciliation {
             }
         }
 
-        // ── Passo 3: Converter Matriz de Restrição C -> A ───────
-        double[][] A_arr = new double[C.getNumRows()][C.getNumCols()];
-        for (int r = 0; r < C.getNumRows(); r++) {
-            for (int c = 0; c < C.getNumCols(); c++) {
-                A_arr[r][c] = C.get(r, c);
+        // ── Passo 3: Matriz A por geometria (limiar de distância) ───────
+        // Requisito AV2: incidência baseada em conectividade geométrica.
+        double limiarGeometrico = calcularLimiarGeometrico(mediaDist, LIMIAR_GEOMETRICO_FATOR);
+        double[][] A_arr = construirMatrizIncidenciaPorLimiar(mediaDist, limiarGeometrico);
+
+        // Fallback robusto: se não houver conexões válidas no limiar,
+        // mantém a estratégia por espaço nulo já validada.
+        if (A_arr == null || A_arr.length == 0) {
+            A_arr = new double[C.getNumRows()][C.getNumCols()];
+            for (int r = 0; r < C.getNumRows(); r++) {
+                for (int c = 0; c < C.getNumCols(); c++) {
+                    A_arr[r][c] = C.get(r, c);
+                }
             }
         }
 
@@ -276,6 +287,56 @@ public class DataReconciliation {
             result[i] = yHat.get(i, 0);
         }
         return result;
+    }
+
+    private static double calcularLimiarGeometrico(float[] mediaDistancias, double fator) {
+        if (mediaDistancias == null || mediaDistancias.length == 0) return Double.NaN;
+        double soma = 0;
+        int count = 0;
+        for (float d : mediaDistancias) {
+            if (d > 0) {
+                soma += d;
+                count++;
+            }
+        }
+        if (count == 0) return Double.NaN;
+        return (soma / count) * fator;
+    }
+
+    /**
+     * Constrói matriz de incidência A com base em conectividade por limiar:
+     * se d_j < limiar, o canhão j é considerado conectado ao alvo.
+     *
+     * A dimensão de saída é k x (N-1), coerente com o vetor y atual
+     * (diferenças entre canhões 1..N-1 e canhão referência 0).
+     */
+    public static double[][] construirMatrizIncidenciaPorLimiar(float[] mediaDistancias, double limiar) {
+        if (mediaDistancias == null || mediaDistancias.length < 3 || !Double.isFinite(limiar)) {
+            return null;
+        }
+
+        List<Integer> conectados = new ArrayList<>();
+        // Ignora o canhão de referência (índice 0), pois y usa [1..N-1].
+        for (int j = 1; j < mediaDistancias.length; j++) {
+            if (mediaDistancias[j] <= limiar) {
+                conectados.add(j - 1);
+            }
+        }
+
+        if (conectados.size() < 2) {
+            return null;
+        }
+
+        int rows = conectados.size() - 1;
+        int cols = mediaDistancias.length - 1;
+        double[][] A = new double[rows][cols];
+        for (int r = 0; r < rows; r++) {
+            int c1 = conectados.get(r);
+            int c2 = conectados.get(r + 1);
+            A[r][c1] = 1.0;
+            A[r][c2] = -1.0;
+        }
+        return A;
     }
 
     /**

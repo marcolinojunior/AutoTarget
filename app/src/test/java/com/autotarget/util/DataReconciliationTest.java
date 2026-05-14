@@ -36,4 +36,30 @@ public class DataReconciliationTest {
         }
         assertEquals(0.0, sum, 1e-6);
     }
+
+    @Test
+    public void testConstruirMatrizIncidenciaPorLimiar() {
+        float[] medias = {40f, 20f, 22f, 35f, 21f};
+        double limiar = 25.0;
+
+        double[][] a = DataReconciliation.construirMatrizIncidenciaPorLimiar(medias, limiar);
+
+        assertNotNull(a);
+        assertEquals(2, a.length);
+        assertEquals(4, a[0].length);
+
+        // conectados esperados (sem canhão 0): 1,2,4 -> índices internos 0,1,3
+        // linhas: [1,-1,0,0] e [0,1,0,-1]
+        assertEquals(1.0, a[0][0], 1e-9);
+        assertEquals(-1.0, a[0][1], 1e-9);
+        assertEquals(1.0, a[1][1], 1e-9);
+        assertEquals(-1.0, a[1][3], 1e-9);
+    }
+
+    @Test
+    public void testConstruirMatrizIncidenciaPorLimiarSemConectividade() {
+        float[] medias = {40f, 30f, 31f, 32f};
+        double[][] a = DataReconciliation.construirMatrizIncidenciaPorLimiar(medias, 10.0);
+        assertNull(a);
+    }
 }

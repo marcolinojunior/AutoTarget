@@ -1,20 +1,3 @@
-/*
- * ============================================================================
- * Arquivo: BenchmarkActivity.java
- * Pacote:  com.autotarget.ui
- * ============================================================================
- *
- * DESCRIÇÃO TÉCNICA:
- *   Modo de benchmark para análise de desempenho via Lei de Amdahl.
- *   Injeta 10-100 alvos e mede T_1 vs T_N com restrição de cores via JNI.
- *   Calcula S(N) = T_1/T_N e P_estimado.
- *   Compara resultados com e sem QuadTree (antes/depois).
- *
- * LEI DE AMDAHL: S(N) = 1 / ((1-P) + P/N)
- * P_estimado = (1/S_pratico - 1) / (1/N - 1)
- *
- * ============================================================================
- */
 package com.autotarget.ui;
 
 import android.graphics.Canvas;
@@ -23,7 +6,6 @@ import android.graphics.Paint;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -35,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
+import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ThreadAffinityHelper;
 
 import java.util.ArrayList;
@@ -44,35 +27,50 @@ import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Benchmark de desempenho — Lei de Amdahl (AV4).
+ * Benchmark com comparação de speedup por afinidade de núcleos e métricas de resposta.
  */
 public class BenchmarkActivity extends AppCompatActivity {
 
-    private static final String TAG = "Benchmark";
-    private static final int DURACAO_BENCHMARK_MS = 30000; // 30s
+    private static final int DURACAO_BENCHMARK_MS = 30000;
 
     private TextView tvNumAlvos, tvResultados, tvStatus;
     private SeekBar sbAlvos;
     private Button btnIniciar;
+    private BenchmarkChartView chartView;
     private Handler handler;
 
     private int numAlvos = 50;
     private boolean rodando = false;
 
-    // Resultados
     private final List<String> resultadosTexto = new ArrayList<>();
+    private final List<BenchmarkSample> samples = new ArrayList<>();
+
+    private static final class BenchmarkSample {
+        final int cores;
+        final long elapsedMs;
+        final double speedup;
+        final double speedupTeorico;
+        final double pEstimado;
+
+        BenchmarkSample(int cores, long elapsedMs, double speedup, double speedupTeorico, double pEstimado) {
+            this.cores = cores;
+            this.elapsedMs = elapsedMs;
+            this.speedup = speedup;
+            this.speedupTeorico = speedupTeorico;
+            this.pEstimado = pEstimado;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         if (getSupportActionBar() != null) {
-            getSupportActionBar().setTitle("⚡ Benchmark Amdahl");
+            getSupportActionBar().setTitle("Benchmark AV2/AV4");
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
 
         handler = new Handler(Looper.getMainLooper());
-
         ScrollView scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(Color.parseColor("#1A1A2E"));
         scrollView.setPadding(24, 24, 24, 24);
@@ -80,23 +78,21 @@ public class BenchmarkActivity extends AppCompatActivity {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
 
-        // Título
         TextView title = new TextView(this);
-        title.setText("Lei de Amdahl — Análise de Speedup");
+        title.setText("Speedup por afinidade + tempos de resposta");
         title.setTextSize(18);
         title.setTextColor(Color.WHITE);
         title.setPadding(0, 0, 0, 16);
         layout.addView(title);
 
-        // SeekBar para número de alvos
         tvNumAlvos = new TextView(this);
         tvNumAlvos.setText("Número de alvos: 50");
         tvNumAlvos.setTextColor(Color.parseColor("#00B4D8"));
         layout.addView(tvNumAlvos);
 
         sbAlvos = new SeekBar(this);
-        sbAlvos.setMax(90); // 10 a 100
-        sbAlvos.setProgress(40); // 50
+        sbAlvos.setMax(90);
+        sbAlvos.setProgress(40);
         sbAlvos.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
@@ -108,14 +104,12 @@ public class BenchmarkActivity extends AppCompatActivity {
         });
         layout.addView(sbAlvos);
 
-        // Status
         tvStatus = new TextView(this);
         tvStatus.setText("Pronto para iniciar");
         tvStatus.setTextColor(Color.parseColor("#FF9800"));
         tvStatus.setPadding(0, 16, 0, 16);
         layout.addView(tvStatus);
 
-        // Botão
         btnIniciar = new Button(this);
         btnIniciar.setText("Iniciar Benchmark");
         btnIniciar.setBackgroundColor(Color.parseColor("#E94560"));
@@ -123,29 +117,16 @@ public class BenchmarkActivity extends AppCompatActivity {
         btnIniciar.setOnClickListener(v -> iniciarBenchmark());
         layout.addView(btnIniciar);
 
-        // Resultados
+        chartView = new BenchmarkChartView(this);
+        chartView.setMinimumHeight(420);
+        layout.addView(chartView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 420));
+
         tvResultados = new TextView(this);
         tvResultados.setTextColor(Color.WHITE);
         tvResultados.setTextSize(13);
         tvResultados.setPadding(0, 24, 0, 0);
         layout.addView(tvResultados);
-
-        // Fórmulas
-        TextView tvFormulas = new TextView(this);
-        tvFormulas.setText(
-                "\n══════════════════════════════════\n" +
-                "FÓRMULAS:\n" +
-                "S(N) = 1 / ((1-P) + P/N)\n" +
-                "S_prático = T₁ / T_N\n" +
-                "P_estimado = (1/S - 1) / (1/N - 1)\n" +
-                "\nGARGALOS SERIAIS:\n" +
-                "• collisionLock (contenção)\n" +
-                "• Canvas.draw() (seriado)\n" +
-                "• Firebase I/O (fila)\n" +
-                "══════════════════════════════════");
-        tvFormulas.setTextColor(Color.parseColor("#B0BEC5"));
-        tvFormulas.setTextSize(12);
-        layout.addView(tvFormulas);
 
         scrollView.addView(layout);
         setContentView(scrollView);
@@ -156,61 +137,58 @@ public class BenchmarkActivity extends AppCompatActivity {
         rodando = true;
         btnIniciar.setEnabled(false);
         resultadosTexto.clear();
+        samples.clear();
+        RMAAnalysis.resetRuntimeStats();
 
-        resultadosTexto.add("═══ BENCHMARK AMDAHL ═══");
+        resultadosTexto.add("═══ BENCHMARK ESCALABILIDADE ═══");
         resultadosTexto.add("Alvos: " + numAlvos + " | Duração: 30s");
+        resultadosTexto.add("Configurações: 1, 2, 4, todos os núcleos");
         resultadosTexto.add("");
 
-        // Executar sequencialmente: 1 core, 2 cores, 4 cores, all cores
         new Thread(() -> {
             int[] coreConfigs = {1, 2, 4, 8};
             int[] masks = {
                     ThreadAffinityHelper.SINGLE_CORE,
-                    0x03,  // 2 cores
+                    0x03,
                     ThreadAffinityHelper.LITTLE_CORES,
                     ThreadAffinityHelper.ALL_CORES
             };
 
             long t1 = 0;
-
-            for (int ci = 0; ci < coreConfigs.length; ci++) {
-                int cores = coreConfigs[ci];
-                int mask = masks[ci];
-
+            for (int i = 0; i < coreConfigs.length; i++) {
+                int cores = coreConfigs[i];
+                int mask = masks[i];
                 updateStatus("Rodando com " + cores + " core(s)...");
 
-                // Definir afinidade
                 if (ThreadAffinityHelper.isAvailable()) {
-                    ThreadAffinityHelper.trySetAffinity(
-                            android.os.Process.myTid(), mask);
+                    ThreadAffinityHelper.trySetAffinityPreferProcessApi(android.os.Process.myTid(), mask);
                 }
 
                 long elapsed = executarCargaTrabalho();
-
-                if (ci == 0) t1 = elapsed;
+                if (i == 0) t1 = elapsed;
 
                 double speedup = t1 > 0 ? (double) t1 / elapsed : 1.0;
                 double pEstimado = 0;
                 if (cores > 1 && speedup > 1.0) {
                     pEstimado = (1.0 / speedup - 1.0) / (1.0 / cores - 1.0);
                 }
+                double pHipotetico = 0.7;
+                double speedupTeorico = 1.0 / ((1 - pHipotetico) + pHipotetico / cores);
 
-                double speedupTeorico = 1.0; // com P=0.7 hipotético
-                double pHip = 0.7;
-                speedupTeorico = 1.0 / ((1 - pHip) + pHip / cores);
-
-                String line = String.format(Locale.US,
-                        "N=%d: T=%dms | S=%.2f | S_teo=%.2f | P=%.3f",
-                        cores, elapsed, speedup, speedupTeorico, pEstimado);
-                resultadosTexto.add(line);
+                samples.add(new BenchmarkSample(cores, elapsed, speedup, speedupTeorico, pEstimado));
+                resultadosTexto.add(String.format(Locale.US,
+                        "N=%d T=%dms S=%.2f S_teo=%.2f P=%.3f",
+                        cores, elapsed, speedup, speedupTeorico, pEstimado));
                 updateResults();
-
-                Log.i(TAG, line);
+                updateChart();
             }
 
             resultadosTexto.add("");
-            resultadosTexto.add("T₁ = " + t1 + "ms");
-            resultadosTexto.add("Gargalos: collisionLock, Canvas, I/O");
+            resultadosTexto.add("Tabela de tarefas (Pi,Ci,Di,Ji,deps):");
+            resultadosTexto.add(RMAAnalysis.getTaskTableSummary());
+            resultadosTexto.add("Métricas de resposta observadas:");
+            resultadosTexto.add(RMAAnalysis.getRuntimeMetricsReport());
+
             updateResults();
             updateStatus("Benchmark concluído!");
 
@@ -218,18 +196,14 @@ public class BenchmarkActivity extends AppCompatActivity {
                 rodando = false;
                 btnIniciar.setEnabled(true);
             });
-        }).start();
+        }, "BenchmarkRunner").start();
     }
 
-    /**
-     * Executa carga de trabalho simulada com N alvos por 30 segundos.
-     * @return tempo total de processamento em ms
-     */
     private long executarCargaTrabalho() {
         Random rng = new Random();
         CopyOnWriteArrayList<Alvo> alvos = new CopyOnWriteArrayList<>();
+        Object lock = new Object();
 
-        // Criar alvos
         for (int i = 0; i < numAlvos; i++) {
             float x = 30 + rng.nextFloat() * 940;
             float y = 30 + rng.nextFloat() * 1800;
@@ -238,32 +212,48 @@ public class BenchmarkActivity extends AppCompatActivity {
             alvo.start();
         }
 
-        // Medir tempo de verificação de colisões durante 30s
         long totalNs = 0;
         long start = System.currentTimeMillis();
-        Object lock = new Object();
+        long lastSensorTick = start;
 
         while (System.currentTimeMillis() - start < DURACAO_BENCHMARK_MS) {
             long frameStart = System.nanoTime();
             synchronized (lock) {
                 for (Alvo a : alvos) {
-                    // Simular trabalho de colisão
                     if (!a.isAtivo()) continue;
                     float dist = (float) Math.sqrt(a.getX() * a.getX() + a.getY() * a.getY());
+                    if (dist < 0) break;
                 }
             }
+            long frameElapsedMs = (System.nanoTime() - frameStart) / 1_000_000;
+            RMAAnalysis.recordExecution("T1-Physics", frameElapsedMs);
             totalNs += System.nanoTime() - frameStart;
 
-            try { Thread.sleep(16); } catch (InterruptedException e) { break; }
+            long now = System.currentTimeMillis();
+            if (now - lastSensorTick >= 1000) {
+                long sensorStart = System.nanoTime();
+                int ativos = 0;
+                for (Alvo a : alvos) if (a.isAtivo()) ativos++;
+                if (ativos < 0) break;
+                long sensorElapsedMs = (System.nanoTime() - sensorStart) / 1_000_000;
+                RMAAnalysis.recordExecution("T7-Sensor", sensorElapsedMs);
+                lastSensorTick = now;
+            }
+
+            try {
+                Thread.sleep(16);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
 
-        // Parar alvos
         for (Alvo a : alvos) {
             a.setAtivo(false);
             a.interrupt();
         }
 
-        return totalNs / 1_000_000; // retornar em ms
+        return totalNs / 1_000_000;
     }
 
     private void updateStatus(String msg) {
@@ -273,14 +263,87 @@ public class BenchmarkActivity extends AppCompatActivity {
     private void updateResults() {
         handler.post(() -> {
             StringBuilder sb = new StringBuilder();
-            for (String s : resultadosTexto) sb.append(s).append("\n");
+            for (String s : resultadosTexto) {
+                sb.append(s).append("\n");
+            }
             tvResultados.setText(sb.toString());
         });
+    }
+
+    private void updateChart() {
+        handler.post(() -> chartView.setData(new ArrayList<>(samples)));
     }
 
     @Override
     public boolean onSupportNavigateUp() {
         finish();
         return true;
+    }
+
+    private static class BenchmarkChartView extends View {
+        private final Paint paintAxis = new Paint();
+        private final Paint paintSpeedup = new Paint();
+        private final Paint paintTempo = new Paint();
+        private final Paint paintText = new Paint();
+        private List<BenchmarkSample> data = new ArrayList<>();
+
+        BenchmarkChartView(android.content.Context context) {
+            super(context);
+            paintAxis.setColor(Color.parseColor("#607D8B"));
+            paintAxis.setStrokeWidth(3f);
+            paintSpeedup.setColor(Color.parseColor("#00B4D8"));
+            paintTempo.setColor(Color.parseColor("#E94560"));
+            paintText.setColor(Color.WHITE);
+            paintText.setTextSize(24f);
+            paintText.setAntiAlias(true);
+        }
+
+        void setData(List<BenchmarkSample> data) {
+            this.data = data;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int w = getWidth();
+            int h = getHeight();
+            float left = 70f;
+            float right = w - 20f;
+            float top = 20f;
+            float bottom = h - 45f;
+
+            canvas.drawColor(Color.parseColor("#16213E"));
+            canvas.drawLine(left, top, left, bottom, paintAxis);
+            canvas.drawLine(left, bottom, right, bottom, paintAxis);
+            canvas.drawText("Comparativo: azul=speedup | vermelho=tempo relativo", left, 18, paintText);
+
+            if (data == null || data.isEmpty()) return;
+
+            double maxSpeedup = 1.0;
+            long maxTempo = 1;
+            for (BenchmarkSample s : data) {
+                maxSpeedup = Math.max(maxSpeedup, s.speedup);
+                maxTempo = Math.max(maxTempo, s.elapsedMs);
+            }
+
+            float slot = (right - left) / data.size();
+            float barW = slot * 0.28f;
+            for (int i = 0; i < data.size(); i++) {
+                BenchmarkSample s = data.get(i);
+                float baseX = left + i * slot + slot * 0.18f;
+
+                float speedupRatio = (float) (s.speedup / maxSpeedup);
+                float speedupH = speedupRatio * (bottom - top - 18f);
+                canvas.drawRect(baseX, bottom - speedupH, baseX + barW, bottom, paintSpeedup);
+
+                float tempoRatio = (float) s.elapsedMs / maxTempo;
+                float tempoH = tempoRatio * (bottom - top - 18f);
+                float tx = baseX + barW + 8f;
+                canvas.drawRect(tx, bottom - tempoH, tx + barW, bottom, paintTempo);
+
+                canvas.drawText("N=" + s.cores, baseX - 2f, bottom + 22f, paintText);
+            }
+        }
     }
 }

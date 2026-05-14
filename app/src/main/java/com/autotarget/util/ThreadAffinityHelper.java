@@ -74,4 +74,22 @@ public class ThreadAffinityHelper {
             }
         }
     }
+
+    /**
+     * Tenta usar Process.setThreadAffinityMask() via reflexão e faz fallback para JNI.
+     * Alguns dispositivos não expõem a API; nesses casos, usa o wrapper nativo.
+     */
+    public static void trySetAffinityPreferProcessApi(int threadId, int mask) {
+        try {
+            java.lang.reflect.Method method = android.os.Process.class
+                    .getDeclaredMethod("setThreadAffinityMask", int.class, int.class);
+            method.setAccessible(true);
+            method.invoke(null, threadId, mask);
+            Log.i(TAG, "Afinidade aplicada via Process.setThreadAffinityMask");
+            return;
+        } catch (Throwable ignored) {
+            // Fallback abaixo.
+        }
+        trySetAffinity(threadId, mask);
+    }
 }

@@ -31,11 +31,14 @@ package com.autotarget.service;
 import android.util.Log;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.Canhao;
+import com.autotarget.model.Lado;
 import com.autotarget.util.RMAAnalysis;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -50,20 +53,18 @@ public class SensorThread extends Thread {
     /** Referência ao motor do jogo para obter listas dinâmicas. */
     private final com.autotarget.engine.Jogo jogo;
 
-    /** Dados de sensor coletados (buffer compartilhado com Reconciliação). */
+    /** Dados por lado para atender coleta/otimização independentes por território. */
+    private final EnumMap<Lado, SideSensorData> dadosPorLado;
+
+    /** Dados agregados da última coleta (compatibilidade com API existente). */
     private volatile float[] leiturasPosX;
     private volatile float[] leiturasPosY;
     private volatile float[] leiturasVelocidade;
+    private volatile float[] leiturasVelocidadeX;
+    private volatile float[] leiturasVelocidadeY;
     private volatile float[] verdadeiroPosX;
     private volatile float[] verdadeiroPosY;
     private volatile int quantidadeAlvosColetados;
-
-    /**
-     * Buffer histórico de distâncias d_ij para reconciliação.
-     * Cada entrada é float[M][N] onde M=alvos, N=canhões.
-     * Mantém as últimas 10 coletas (janela de 10 segundos).
-     */
-    private final LinkedList<float[][]> historicoDistancias;
     private static final int TAMANHO_HISTORICO = 10;
 
     /** Flag de controle. */
@@ -84,6 +85,18 @@ public class SensorThread extends Thread {
     /** Ruído simulado nos sensores. */
     private final Random ruido = new Random();
 
+    private static class SideSensorData {
+        float[] leiturasPosX = new float[0];
+        float[] leiturasPosY = new float[0];
+        float[] leiturasVelocidade = new float[0];
+        float[] leiturasVelocidadeX = new float[0];
+        float[] leiturasVelocidadeY = new float[0];
+        float[] verdadeiroPosX = new float[0];
+        float[] verdadeiroPosY = new float[0];
+        int quantidadeAlvosColetados = 0;
+        final LinkedList<float[][]> historicoDistancias = new LinkedList<>();
+    }
+
     /**
      * Cria a thread de sensores.
      *
@@ -103,7 +116,9 @@ public class SensorThread extends Thread {
         this.leiturasPosY = new float[0];
         this.leiturasVelocidade = new float[0];
         this.quantidadeAlvosColetados = 0;
-        this.historicoDistancias = new LinkedList<>();
+        this.dadosPorLado = new EnumMap<>(Lado.class);
+        this.dadosPorLado.put(Lado.ESQUERDO, new SideSensorData());
+        this.dadosPorLado.put(Lado.DIREITO, new SideSensorData());
         setDaemon(true);
     }
 
@@ -131,92 +146,151 @@ public class SensorThread extends Thread {
      * Lock ordering: collisionLock (externo) → sensorLock (interno).
      */
     private void coletarDados() {
-        float[] localPosX;
-        float[] localPosY;
-        float[] localVel;
-        float[] localVerdadeiroX;
-        float[] localVerdadeiroY;
-        int localCount;
-        List<float[]> alvosAtivosPos = new ArrayList<>();
-        List<Canhao> canhoesAtuais = null;
+        final EnumMap<Lado, SideSnapshot> snapshotsPorLado = new EnumMap<>(Lado.class);
+        snapshotsPorLado.put(Lado.ESQUERDO, new SideSnapshot());
+        snapshotsPorLado.put(Lado.DIREITO, new SideSnapshot());
 
         synchronized (collisionLock) {
-            // Contar alvos ativos
             List<Alvo> alvosAtuais = jogo.getAllAlvos();
-            canhoesAtuais = jogo.getAllCanhoes();
-            
-            int count = 0;
-            for (Alvo a : alvosAtuais) {
-                if (a.isAtivo()) count++;
+            List<Canhao> canhoesEsq = new ArrayList<>();
+            List<Canhao> canhoesDir = new ArrayList<>();
+            for (Canhao c : jogo.getCanhoesEsquerdo()) {
+                if (c.isAtivo()) canhoesEsq.add(c);
+            }
+            for (Canhao c : jogo.getCanhoesDireito()) {
+                if (c.isAtivo()) canhoesDir.add(c);
             }
 
-            localPosX = new float[count];
-            localPosY = new float[count];
-            localVel = new float[count];
-            localVerdadeiroX = new float[count];
-            localVerdadeiroY = new float[count];
-
-            // Coletar posições dos alvos ativos para distâncias
-            alvosAtivosPos.clear();
-
-            int i = 0;
-            for (Alvo a : alvosAtuais) {
-                if (!a.isAtivo()) continue;
-                if (i >= count) break;
-
-                // Ruído proporcional: valor × (1 + N(0, 0.05))
-                float realX = a.getX();
-                float realY = a.getY();
-                float realV = a.getVelocidade();
-
-                localPosX[i] = realX * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
-                localPosY[i] = realY * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
-                localVel[i] = realV * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
-
-                localVerdadeiroX[i] = realX;
-                localVerdadeiroY[i] = realY;
-
-                alvosAtivosPos.add(new float[]{realX, realY});
-                i++;
+            int larguraTela = Math.max(jogo.getLarguraTela(), 1);
+            for (Alvo alvo : alvosAtuais) {
+                if (!alvo.isAtivo()) continue;
+                Lado lado = Lado.determinar(alvo.getX(), larguraTela);
+                snapshotsPorLado.get(lado).alvosAtivos.add(alvo);
             }
-            localCount = i;
+
+            snapshotsPorLado.get(Lado.ESQUERDO).canhoesAtivos = canhoesEsq;
+            snapshotsPorLado.get(Lado.DIREITO).canhoesAtivos = canhoesDir;
+            preencherLeiturasLado(snapshotsPorLado.get(Lado.ESQUERDO));
+            preencherLeiturasLado(snapshotsPorLado.get(Lado.DIREITO));
         }
 
-        // ── Fase 2: publicar dados e notificar sob sensorLock ──
         synchronized (sensorLock) {
-            leiturasPosX = localPosX;
-            leiturasPosY = localPosY;
-            leiturasVelocidade = localVel;
-            verdadeiroPosX = localVerdadeiroX;
-            verdadeiroPosY = localVerdadeiroY;
-            quantidadeAlvosColetados = localCount;
-
-            int numCanhoes = canhoesAtuais.size();
-            if (numCanhoes > 0 && localCount > 0) {
-                // Limpar histórico antigo e gerar 10 amostras instantâneas (Burst Radar)
-                // Isso garante que a geometria do alvo é consistente para a reconciliação (alvo não se moveu durante o burst)
-                historicoDistancias.clear();
-
-                for (int burst = 0; burst < TAMANHO_HISTORICO; burst++) {
-                    float[][] burstDistancias = new float[localCount][numCanhoes];
-
-                    for (int ai = 0; ai < localCount && ai < alvosAtivosPos.size(); ai++) {
-                        float[] apos = alvosAtivosPos.get(ai);
-                        for (int cj = 0; cj < numCanhoes; cj++) {
-                            Canhao c = canhoesAtuais.get(cj);
-                            float dx = apos[0] - c.getX();
-                            float dy = apos[1] - c.getY();
-                            // Distância com ruído proporcional individual por amostra
-                            float distReal = (float) Math.sqrt(dx * dx + dy * dy);
-                            burstDistancias[ai][cj] = distReal * (1.0f + (float) (ruido.nextGaussian() * PROPORCAO_RUIDO));
-                        }
-                    }
-                    historicoDistancias.addLast(burstDistancias);
-                }
+            for (Map.Entry<Lado, SideSnapshot> entry : snapshotsPorLado.entrySet()) {
+                publicarSnapshotLado(entry.getKey(), entry.getValue());
             }
-
+            publicarAgregadoGlobal();
             sensorLock.notifyAll();
         }
+    }
+
+    private static class SideSnapshot {
+        final List<Alvo> alvosAtivos = new ArrayList<>();
+        List<Canhao> canhoesAtivos = new ArrayList<>();
+        float[] leiturasPosX = new float[0];
+        float[] leiturasPosY = new float[0];
+        float[] leiturasVelocidade = new float[0];
+        float[] leiturasVelocidadeX = new float[0];
+        float[] leiturasVelocidadeY = new float[0];
+        float[] verdadeiroPosX = new float[0];
+        float[] verdadeiroPosY = new float[0];
+        float[][] snapshotDistancias = null;
+    }
+
+    private void preencherLeiturasLado(SideSnapshot snap) {
+        int count = snap.alvosAtivos.size();
+        snap.leiturasPosX = new float[count];
+        snap.leiturasPosY = new float[count];
+        snap.leiturasVelocidade = new float[count];
+        snap.leiturasVelocidadeX = new float[count];
+        snap.leiturasVelocidadeY = new float[count];
+        snap.verdadeiroPosX = new float[count];
+        snap.verdadeiroPosY = new float[count];
+
+        for (int i = 0; i < count; i++) {
+            Alvo alvo = snap.alvosAtivos.get(i);
+            float realX = alvo.getX();
+            float realY = alvo.getY();
+            float realV = alvo.getVelocidade();
+            float realVx = alvo.getDirecaoX() * realV;
+            float realVy = alvo.getDirecaoY() * realV;
+
+            snap.leiturasPosX[i] = aplicarRuidoProporcional(realX);
+            snap.leiturasPosY[i] = aplicarRuidoProporcional(realY);
+            snap.leiturasVelocidade[i] = aplicarRuidoProporcional(realV);
+            snap.leiturasVelocidadeX[i] = aplicarRuidoProporcional(realVx);
+            snap.leiturasVelocidadeY[i] = aplicarRuidoProporcional(realVy);
+            snap.verdadeiroPosX[i] = realX;
+            snap.verdadeiroPosY[i] = realY;
+        }
+
+        int numCanhoes = snap.canhoesAtivos.size();
+        if (count == 0 || numCanhoes == 0) {
+            snap.snapshotDistancias = null;
+            return;
+        }
+        snap.snapshotDistancias = new float[count][numCanhoes];
+        for (int ai = 0; ai < count; ai++) {
+            float ax = snap.verdadeiroPosX[ai];
+            float ay = snap.verdadeiroPosY[ai];
+            for (int cj = 0; cj < numCanhoes; cj++) {
+                Canhao canhao = snap.canhoesAtivos.get(cj);
+                float dx = ax - canhao.getX();
+                float dy = ay - canhao.getY();
+                float distReal = (float) Math.sqrt(dx * dx + dy * dy);
+                snap.snapshotDistancias[ai][cj] = aplicarRuidoProporcional(distReal);
+            }
+        }
+    }
+
+    private float aplicarRuidoProporcional(float valorReal) {
+        float escala = Math.max(Math.abs(valorReal), 1f);
+        float ruidoGaussiano = (float) (ruido.nextGaussian() * PROPORCAO_RUIDO * escala);
+        return valorReal + ruidoGaussiano;
+    }
+
+    private void publicarSnapshotLado(Lado lado, SideSnapshot snap) {
+        SideSensorData dado = dadosPorLado.get(lado);
+        if (dado == null) return;
+
+        dado.leiturasPosX = snap.leiturasPosX;
+        dado.leiturasPosY = snap.leiturasPosY;
+        dado.leiturasVelocidade = snap.leiturasVelocidade;
+        dado.leiturasVelocidadeX = snap.leiturasVelocidadeX;
+        dado.leiturasVelocidadeY = snap.leiturasVelocidadeY;
+        dado.verdadeiroPosX = snap.verdadeiroPosX;
+        dado.verdadeiroPosY = snap.verdadeiroPosY;
+        dado.quantidadeAlvosColetados = snap.alvosAtivos.size();
+
+        if (snap.snapshotDistancias != null) {
+            dado.historicoDistancias.addLast(snap.snapshotDistancias);
+            while (dado.historicoDistancias.size() > TAMANHO_HISTORICO) {
+                dado.historicoDistancias.removeFirst();
+            }
+        }
+    }
+
+    private void publicarAgregadoGlobal() {
+        SideSensorData esq = dadosPorLado.get(Lado.ESQUERDO);
+        SideSensorData dir = dadosPorLado.get(Lado.DIREITO);
+        if (esq == null || dir == null) return;
+
+        leiturasPosX = concatenar(esq.leiturasPosX, dir.leiturasPosX);
+        leiturasPosY = concatenar(esq.leiturasPosY, dir.leiturasPosY);
+        leiturasVelocidade = concatenar(esq.leiturasVelocidade, dir.leiturasVelocidade);
+        leiturasVelocidadeX = concatenar(esq.leiturasVelocidadeX, dir.leiturasVelocidadeX);
+        leiturasVelocidadeY = concatenar(esq.leiturasVelocidadeY, dir.leiturasVelocidadeY);
+        verdadeiroPosX = concatenar(esq.verdadeiroPosX, dir.verdadeiroPosX);
+        verdadeiroPosY = concatenar(esq.verdadeiroPosY, dir.verdadeiroPosY);
+        quantidadeAlvosColetados = esq.quantidadeAlvosColetados + dir.quantidadeAlvosColetados;
+    }
+
+    private float[] concatenar(float[] a, float[] b) {
+        if (a == null || a.length == 0) return b != null ? b.clone() : new float[0];
+        if (b == null || b.length == 0) return a.clone();
+        float[] out = new float[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     // ── Estatísticas para Reconciliação ──────────────────────────
@@ -226,15 +300,22 @@ public class SensorThread extends Thread {
      * @return float[M][N] com médias, ou null se dados insuficientes
      */
     public float[][] getMediaDistancias() {
-        synchronized (sensorLock) {
-            if (historicoDistancias.isEmpty()) return null;
+        float[][] dir = getMediaDistancias(Lado.DIREITO);
+        if (dir != null) return dir;
+        return getMediaDistancias(Lado.ESQUERDO);
+    }
 
-            int M = historicoDistancias.getLast().length;
-            int N = historicoDistancias.getLast()[0].length;
+    public float[][] getMediaDistancias(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null || dado.historicoDistancias.isEmpty()) return null;
+
+            int M = dado.historicoDistancias.getLast().length;
+            int N = dado.historicoDistancias.getLast()[0].length;
             float[][] media = new float[M][N];
             int count = 0;
 
-            for (float[][] snapshot : historicoDistancias) {
+            for (float[][] snapshot : dado.historicoDistancias) {
                 if (snapshot.length != M || snapshot[0].length != N) continue;
                 for (int i = 0; i < M; i++) {
                     for (int j = 0; j < N; j++) {
@@ -259,16 +340,24 @@ public class SensorThread extends Thread {
      * @return float[M][N] com variâncias, ou null se dados insuficientes
      */
     public float[][] getVarianciaDistancias() {
+        float[][] dir = getVarianciaDistancias(Lado.DIREITO);
+        if (dir != null) return dir;
+        return getVarianciaDistancias(Lado.ESQUERDO);
+    }
+
+    public float[][] getVarianciaDistancias(Lado lado) {
         synchronized (sensorLock) {
-            float[][] media = getMediaDistancias();
-            if (media == null || historicoDistancias.size() < 2) return null;
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null || dado.historicoDistancias.size() < 2) return null;
+            float[][] media = getMediaDistancias(lado);
+            if (media == null) return null;
 
             int M = media.length;
             int N = media[0].length;
             float[][] variancia = new float[M][N];
             int count = 0;
 
-            for (float[][] snapshot : historicoDistancias) {
+            for (float[][] snapshot : dado.historicoDistancias) {
                 if (snapshot.length != M || snapshot[0].length != N) continue;
                 for (int i = 0; i < M; i++) {
                     for (int j = 0; j < N; j++) {
@@ -293,20 +382,41 @@ public class SensorThread extends Thread {
      * @return número de leituras no buffer histórico
      */
     public int getHistoricoCount() {
+        int dir = getHistoricoCount(Lado.DIREITO);
+        int esq = getHistoricoCount(Lado.ESQUERDO);
+        return Math.max(dir, esq);
+    }
+
+    public int getHistoricoCount(Lado lado) {
         synchronized (sensorLock) {
-            return historicoDistancias.size();
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? 0 : dado.historicoDistancias.size();
         }
     }
 
     public float[] getVerdadeiroPosX() {
+        float[] dir = getVerdadeiroPosX(Lado.DIREITO);
+        if (dir.length > 0) return dir;
+        return getVerdadeiroPosX(Lado.ESQUERDO);
+    }
+
+    public float[] getVerdadeiroPosX(Lado lado) {
         synchronized (sensorLock) {
-            return verdadeiroPosX;
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.verdadeiroPosX.clone();
         }
     }
 
     public float[] getVerdadeiroPosY() {
+        float[] dir = getVerdadeiroPosY(Lado.DIREITO);
+        if (dir.length > 0) return dir;
+        return getVerdadeiroPosY(Lado.ESQUERDO);
+    }
+
+    public float[] getVerdadeiroPosY(Lado lado) {
         synchronized (sensorLock) {
-            return verdadeiroPosY;
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.verdadeiroPosY.clone();
         }
     }
 
@@ -315,7 +425,44 @@ public class SensorThread extends Thread {
     public float[] getLeiturasPosX() { return leiturasPosX; }
     public float[] getLeiturasPosY() { return leiturasPosY; }
     public float[] getLeiturasVelocidade() { return leiturasVelocidade; }
+    public float[] getLeiturasVelocidadeX() { return leiturasVelocidadeX; }
+    public float[] getLeiturasVelocidadeY() { return leiturasVelocidadeY; }
     public int getQuantidadeAlvosColetados() { return quantidadeAlvosColetados; }
+
+    public float[] getLeiturasPosX(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.leiturasPosX.clone();
+        }
+    }
+
+    public float[] getLeiturasPosY(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.leiturasPosY.clone();
+        }
+    }
+
+    public float[] getLeiturasVelocidade(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.leiturasVelocidade.clone();
+        }
+    }
+
+    public float[] getLeiturasVelocidadeX(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.leiturasVelocidadeX.clone();
+        }
+    }
+
+    public float[] getLeiturasVelocidadeY(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            return dado == null ? new float[0] : dado.leiturasVelocidadeY.clone();
+        }
+    }
 
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
     public boolean isAtivo() { return ativo; }
