@@ -129,12 +129,10 @@ public class ReconciliacaoThread extends Thread {
         }
 
         List<Canhao> canhoesLado = new ArrayList<>();
-        synchronized (collisionLock) {
-            List<Canhao> origem = lado == Lado.ESQUERDO ? jogo.getCanhoesEsquerdo() : jogo.getCanhoesDireito();
+        List<Canhao> origem = lado == Lado.ESQUERDO ? jogo.getCanhoesEsquerdo() : jogo.getCanhoesDireito();
             for (Canhao c : origem) {
                 if (c.isAtivo()) canhoesLado.add(c);
             }
-        }
         if (canhoesLado.isEmpty()) return false;
 
         float[][] mediaD = sensorThread.getMediaDistancias(lado);

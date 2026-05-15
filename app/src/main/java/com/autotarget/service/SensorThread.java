@@ -151,7 +151,7 @@ public class SensorThread extends Thread {
         snapshotsPorLado.put(Lado.ESQUERDO, new SideSnapshot());
         snapshotsPorLado.put(Lado.DIREITO, new SideSnapshot());
 
-        synchronized (collisionLock) {
+        synchronized (jogo.getCollisionLock()) {
             List<Alvo> alvosAtuais = jogo.getAllAlvos();
             List<Canhao> canhoesEsq = new ArrayList<>();
             List<Canhao> canhoesDir = new ArrayList<>();
