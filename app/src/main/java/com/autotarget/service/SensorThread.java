@@ -33,6 +33,7 @@ import com.autotarget.model.Alvo;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.util.RMAAnalysis;
+import com.autotarget.util.ReconciliationLog;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -181,6 +182,10 @@ public class SensorThread extends Thread {
             publicarAgregadoGlobal();
             sensorLock.notifyAll();
         }
+
+        for (Map.Entry<Lado, SideSnapshot> entry : snapshotsPorLado.entrySet()) {
+            registrarEstatisticasSensor(entry.getKey(), entry.getValue());
+        }
     }
 
     private static class SideSnapshot {
@@ -293,6 +298,34 @@ public class SensorThread extends Thread {
         return out;
     }
 
+    private void registrarEstatisticasSensor(Lado lado, SideSnapshot snap) {
+        if (snap == null) return;
+        double mediaX = media(snap.leiturasPosX);
+        double varX = varianciaAmostral(snap.leiturasPosX, mediaX);
+        double mediaV = media(snap.leiturasVelocidade);
+        double varV = varianciaAmostral(snap.leiturasVelocidade, mediaV);
+        int historico = getHistoricoCount(lado);
+        ReconciliationLog.getInstance().logSensorStats(
+                lado.name(), snap.alvosAtivos.size(), historico, mediaX, varX, mediaV, varV);
+    }
+
+    private double media(float[] valores) {
+        if (valores == null || valores.length == 0) return 0;
+        double soma = 0;
+        for (float v : valores) soma += v;
+        return soma / valores.length;
+    }
+
+    private double varianciaAmostral(float[] valores, double media) {
+        if (valores == null || valores.length < 2) return 0;
+        double soma = 0;
+        for (float v : valores) {
+            double diff = v - media;
+            soma += diff * diff;
+        }
+        return soma / (valores.length - 1);
+    }
+
     // ── Estatísticas para Reconciliação ──────────────────────────
 
     /**
@@ -392,6 +425,10 @@ public class SensorThread extends Thread {
             SideSensorData dado = dadosPorLado.get(lado);
             return dado == null ? 0 : dado.historicoDistancias.size();
         }
+    }
+
+    public static int getHistoricoMinimoReconciliacao() {
+        return TAMANHO_HISTORICO;
     }
 
     public float[] getVerdadeiroPosX() {

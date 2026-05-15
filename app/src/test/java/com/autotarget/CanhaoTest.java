@@ -206,4 +206,27 @@ public class CanhaoTest {
         assertEquals(Lado.DIREITO, Lado.determinar(400, LARGURA));
         assertEquals(Lado.DIREITO, Lado.determinar(700, LARGURA));
     }
+
+    @Test
+    public void testDisparoLiberaReservaEmRetornoAntecipado() {
+        jogo.setDimensoesTela(LARGURA, ALTURA);
+
+        // Alvo exatamente na posição do canhão causa retorno antecipado (distAim ~ 0)
+        AlvoComum alvo = new AlvoComum(100, 200, 20, 0, LARGURA, ALTURA);
+        jogo.getAlvosEsquerdo().add(alvo);
+        alvos.add(alvo);
+
+        Canhao canhao1 = new Canhao(100, 200, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+        Canhao canhao2 = new Canhao(120, 200, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+        canhoesTestados.add(canhao1);
+        canhoesTestados.add(canhao2);
+
+        canhao1.disparar();
+        Alvo reservadoPorSegundoCanhao = jogo.reservarAlvo(canhao2);
+
+        assertNotNull("A reserva deve ser liberada no retorno antecipado de disparar()", reservadoPorSegundoCanhao);
+        assertSame(alvo, reservadoPorSegundoCanhao);
+    }
 }

@@ -40,6 +40,7 @@ package com.autotarget;
 
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
+import com.autotarget.model.Canhao;
 import com.autotarget.model.Projetil;
 import com.autotarget.model.Lado;
 import com.autotarget.engine.Jogo;
@@ -47,6 +48,8 @@ import com.autotarget.engine.Jogo;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.Assert.*;
@@ -171,5 +174,77 @@ public class ProjetilTest {
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
                 alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
         assertTrue("Projetil deve ser uma Thread", projetil instanceof Thread);
+    }
+
+    @Test
+    public void testReservaLiberadaAoErrarSaindoDaTela() throws Exception {
+        jogo.setDimensoesTela(LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(200, 200, 20, 0, LARGURA, ALTURA);
+        jogo.getAlvosEsquerdo().add(alvo);
+
+        Canhao c1 = new Canhao(100, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+        Canhao c2 = new Canhao(150, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+
+        Alvo reservado = jogo.reservarAlvo(c1);
+        assertSame(alvo, reservado);
+
+        Projetil projetil = new Projetil(LARGURA - 2, 30, 1, 0, 20,
+                jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
+        projetil.start();
+        projetil.join(500);
+
+        Alvo reservadoPorOutroCanhao = jogo.reservarAlvo(c2);
+        assertSame("Reserva deve ser liberada quando projétil erra e sai da tela", alvo, reservadoPorOutroCanhao);
+    }
+
+    @Test
+    public void testReservaLiberadaAoAcertar() throws Exception {
+        jogo.setDimensoesTela(LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(100, 100, 20, 0, LARGURA, ALTURA);
+        jogo.getAlvosEsquerdo().add(alvo);
+
+        Canhao c1 = new Canhao(80, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+        Alvo reservado = jogo.reservarAlvo(c1);
+        assertSame(alvo, reservado);
+
+        Projetil projetil = new Projetil(100, 100, 1, 0, 1,
+                jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
+        projetil.start();
+        projetil.join(500);
+
+        ConcurrentHashMap<Alvo, Canhao> reservas = getReservas(jogo);
+        assertFalse("Reserva deve ser removida quando projétil acerta o alvo", reservas.containsKey(alvo));
+    }
+
+    @Test
+    public void testReservaLiberadaEmInterrupcaoDoProjetil() throws Exception {
+        jogo.setDimensoesTela(LARGURA, ALTURA);
+        AlvoComum alvo = new AlvoComum(300, 300, 20, 0, LARGURA, ALTURA);
+        jogo.getAlvosEsquerdo().add(alvo);
+
+        Canhao c1 = new Canhao(80, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                collisionLock, LARGURA, ALTURA, jogo);
+        Alvo reservado = jogo.reservarAlvo(c1);
+        assertSame(alvo, reservado);
+
+        Projetil projetil = new Projetil(20, 20, 0.5f, 0.7f, 8,
+                jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
+        projetil.start();
+        Thread.sleep(30);
+        projetil.interrupt();
+        projetil.join(500);
+
+        ConcurrentHashMap<Alvo, Canhao> reservas = getReservas(jogo);
+        assertFalse("Reserva deve ser removida quando projétil é interrompido", reservas.containsKey(alvo));
+    }
+
+    @SuppressWarnings("unchecked")
+    private ConcurrentHashMap<Alvo, Canhao> getReservas(Jogo jogo) throws Exception {
+        Field field = Jogo.class.getDeclaredField("reservasAlvos");
+        field.setAccessible(true);
+        return (ConcurrentHashMap<Alvo, Canhao>) field.get(jogo);
     }
 }

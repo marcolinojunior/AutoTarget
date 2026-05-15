@@ -14,6 +14,8 @@ public final class ReconciliationLog {
 
     private final List<String> eventos = new ArrayList<>();
     private final List<ReconSample> reconSamples = new ArrayList<>();
+    private final List<UtilitySample> utilitySamples = new ArrayList<>();
+    private final List<EnergyPenaltySample> energySamples = new ArrayList<>();
 
     private int totalSpawns;
     private int totalShots;
@@ -37,6 +39,46 @@ public final class ReconciliationLog {
         }
     }
 
+    private static final class UtilitySample {
+        final String lado;
+        final int nCanhoes;
+        final double uAtual;
+        final Double uMais1;
+        final Double uMenos1;
+        final double limiarGanho;
+        final float energiaLado;
+
+        UtilitySample(String lado, int nCanhoes, double uAtual, Double uMais1,
+                      Double uMenos1, double limiarGanho, float energiaLado) {
+            this.lado = lado;
+            this.nCanhoes = nCanhoes;
+            this.uAtual = uAtual;
+            this.uMais1 = uMais1;
+            this.uMenos1 = uMenos1;
+            this.limiarGanho = limiarGanho;
+            this.energiaLado = energiaLado;
+        }
+    }
+
+    private static final class EnergyPenaltySample {
+        final float energiaEsq;
+        final float energiaDir;
+        final int canhoesEsq;
+        final int canhoesDir;
+        final double intervaloEsqMs;
+        final double intervaloDirMs;
+
+        EnergyPenaltySample(float energiaEsq, float energiaDir, int canhoesEsq, int canhoesDir,
+                            double intervaloEsqMs, double intervaloDirMs) {
+            this.energiaEsq = energiaEsq;
+            this.energiaDir = energiaDir;
+            this.canhoesEsq = canhoesEsq;
+            this.canhoesDir = canhoesDir;
+            this.intervaloEsqMs = intervaloEsqMs;
+            this.intervaloDirMs = intervaloDirMs;
+        }
+    }
+
     private ReconciliationLog() {}
 
     public static ReconciliationLog getInstance() {
@@ -46,6 +88,8 @@ public final class ReconciliationLog {
     public synchronized void reset() {
         eventos.clear();
         reconSamples.clear();
+        utilitySamples.clear();
+        energySamples.clear();
         totalSpawns = 0;
         totalShots = 0;
         totalHits = 0;
@@ -75,6 +119,35 @@ public final class ReconciliationLog {
         appendEvento(String.format(Locale.US,
                 "AI %s pos=(%.0f,%.0f) U=%.3f U2=%.3f motivo=%s",
                 acao, x, y, utilAtual, utilComparativo, motivo));
+    }
+
+    public synchronized void logUtilityComparison(String lado, int nCanhoes, double uAtual,
+                                                  Double uMais1, Double uMenos1,
+                                                  double limiarGanho, float energiaLado) {
+        utilitySamples.add(new UtilitySample(lado, nCanhoes, uAtual, uMais1, uMenos1, limiarGanho, energiaLado));
+        String mais1 = (uMais1 == null) ? "N/A" : String.format(Locale.US, "%.3f", uMais1);
+        String menos1 = (uMenos1 == null) ? "N/A" : String.format(Locale.US, "%.3f", uMenos1);
+        appendEvento(String.format(Locale.US,
+                "UTILITY lado=%s N=%d U(N)=%.3f U(N+1)=%s U(N-1)=%s limiar=%.3f energia=%.1f",
+                lado, nCanhoes, uAtual, mais1, menos1, limiarGanho, energiaLado));
+    }
+
+    public synchronized void logEnergyPenalty(float energiaEsq, float energiaDir,
+                                              int canhoesEsq, int canhoesDir,
+                                              double intervaloEsqMs, double intervaloDirMs) {
+        energySamples.add(new EnergyPenaltySample(energiaEsq, energiaDir, canhoesEsq, canhoesDir,
+                intervaloEsqMs, intervaloDirMs));
+        appendEvento(String.format(Locale.US,
+                "ENERGY energiaESQ=%.1f energiaDIR=%.1f canhoesESQ=%d canhoesDIR=%d Iesq=%.1fms Idir=%.1fms",
+                energiaEsq, energiaDir, canhoesEsq, canhoesDir, intervaloEsqMs, intervaloDirMs));
+    }
+
+    public synchronized void logSensorStats(String lado, int alvos, int historico,
+                                            double mediaPosX, double varPosX,
+                                            double mediaVel, double varVel) {
+        appendEvento(String.format(Locale.US,
+                "SENSOR lado=%s alvos=%d hist=%d mediaX=%.2f varX=%.4f mediaV=%.3f varV=%.4f",
+                lado, alvos, historico, mediaPosX, varPosX, mediaVel, varVel));
     }
 
     public synchronized void logReconciliation(int nCanhoes, int totalAlvos,
@@ -163,6 +236,44 @@ public final class ReconciliationLog {
             sb.append(String.format(Locale.US, "Reducao media de MSE: %.2f%%\n", reducao));
             sb.append(String.format(Locale.US, "Erro medio de posicao: %.2f px\n", mediaErroPos));
             sb.append(String.format(Locale.US, "Norma media ||A*y_hat||: %.6f\n", mediaNormA));
+        }
+
+        if (!energySamples.isEmpty()) {
+            double mediaIntervaloEsq = 0;
+            double mediaIntervaloDir = 0;
+            float energiaFinalEsq = 0;
+            float energiaFinalDir = 0;
+            int canhoesFinaisEsq = 0;
+            int canhoesFinaisDir = 0;
+            for (EnergyPenaltySample s : energySamples) {
+                mediaIntervaloEsq += s.intervaloEsqMs;
+                mediaIntervaloDir += s.intervaloDirMs;
+                energiaFinalEsq = s.energiaEsq;
+                energiaFinalDir = s.energiaDir;
+                canhoesFinaisEsq = s.canhoesEsq;
+                canhoesFinaisDir = s.canhoesDir;
+            }
+            int n = energySamples.size();
+            mediaIntervaloEsq /= n;
+            mediaIntervaloDir /= n;
+            sb.append("\nMETRICAS_ENERGIA_PENALIDADE\n");
+            sb.append(String.format(Locale.US, "Amostras: %d\n", n));
+            sb.append(String.format(Locale.US, "Intervalo medio ESQ: %.2f ms\n", mediaIntervaloEsq));
+            sb.append(String.format(Locale.US, "Intervalo medio DIR: %.2f ms\n", mediaIntervaloDir));
+            sb.append(String.format(Locale.US, "Energia final ESQ: %.1f | DIR: %.1f\n", energiaFinalEsq, energiaFinalDir));
+            sb.append(String.format(Locale.US, "Canhoes finais ESQ: %d | DIR: %d\n", canhoesFinaisEsq, canhoesFinaisDir));
+        }
+
+        if (!utilitySamples.isEmpty()) {
+            sb.append("\nMETRICAS_OTIMIZACAO_UTILIDADE\n");
+            sb.append(String.format(Locale.US, "Amostras: %d\n", utilitySamples.size()));
+            int ganhosAcimaLimiar = 0;
+            for (UtilitySample s : utilitySamples) {
+                if (s.uMais1 != null && (s.uMais1 - s.uAtual) > s.limiarGanho) {
+                    ganhosAcimaLimiar++;
+                }
+            }
+            sb.append(String.format(Locale.US, "Ganhos marginais U(N+1)-U(N) acima do limiar: %d\n", ganhosAcimaLimiar));
         }
 
         sb.append("\nEVENTOS_RECENTES\n");

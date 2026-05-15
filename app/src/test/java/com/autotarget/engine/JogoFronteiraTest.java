@@ -39,6 +39,29 @@ public class JogoFronteiraTest {
     }
 
     @Test
+    public void testBordaXIgualMeioVaiParaDireitaSemDuplicar() throws Exception {
+        Jogo jogo = new Jogo();
+        jogo.setDimensoesTela(1000, 1000);
+
+        Alvo alvo = new AlvoComum(499, 500, 30, 0, 1000, 1000);
+        jogo.getAlvosEsquerdo().add(alvo);
+
+        Method transferirMethod = Jogo.class.getDeclaredMethod("transferirAlvosCruzados");
+        transferirMethod.setAccessible(true);
+
+        java.lang.reflect.Field xField = Alvo.class.getDeclaredField("x");
+        xField.setAccessible(true);
+        xField.set(alvo, 500f); // exatamente na divisória
+
+        transferirMethod.invoke(jogo);
+
+        assertFalse("Alvo não pode permanecer no lado esquerdo", jogo.getAlvosEsquerdo().contains(alvo));
+        assertTrue("Alvo deve ser transferido para o lado direito no caso x == meio", jogo.getAlvosDireito().contains(alvo));
+        assertEquals("Não pode haver alvo duplicado nas listas", 1,
+                (jogo.getAlvosEsquerdo().contains(alvo) ? 1 : 0) + (jogo.getAlvosDireito().contains(alvo) ? 1 : 0));
+    }
+
+    @Test
     public void testSimultaneidadeColisaoEFronteira() throws Exception {
         Jogo jogo = new Jogo();
         jogo.setDimensoesTela(1000, 1000);
@@ -120,5 +143,55 @@ public class JogoFronteiraTest {
         
         int pontuacaoTotal = jogo.getPontuacaoEsquerdo() + jogo.getPontuacaoDireito();
         assertEquals("A pontuação total distribuída deve ser exatamente 5 pontos", 5, pontuacaoTotal);
+    }
+
+    @Test
+    public void testCruzamentoSimultaneoComDisparoNaoOrfaNemDuplicaAlvo() throws Exception {
+        final Jogo jogo = new Jogo();
+        jogo.setDimensoesTela(1000, 1000);
+
+        final Alvo alvo = new AlvoComum(499, 500, 30, 0, 1000, 1000);
+        jogo.getAlvosEsquerdo().add(alvo);
+
+        final Canhao canhao = new Canhao(120, 500, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
+                jogo.getCollisionLock(), 1000, 1000, jogo);
+
+        final Method transferirMethod = Jogo.class.getDeclaredMethod("transferirAlvosCruzados");
+        transferirMethod.setAccessible(true);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        final CountDownLatch latch = new CountDownLatch(1);
+
+        executor.submit(() -> {
+            try {
+                latch.await();
+                java.lang.reflect.Field xField = Alvo.class.getDeclaredField("x");
+                xField.setAccessible(true);
+                xField.set(alvo, 501f);
+                transferirMethod.invoke(jogo);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+
+        executor.submit(() -> {
+            try {
+                latch.await();
+                canhao.disparar();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+
+        latch.countDown();
+        executor.shutdown();
+        executor.awaitTermination(2, TimeUnit.SECONDS);
+
+        int ocorrencias = (jogo.getAlvosEsquerdo().contains(alvo) ? 1 : 0)
+                + (jogo.getAlvosDireito().contains(alvo) ? 1 : 0);
+        assertEquals("Alvo deve existir em exatamente uma lista após corrida disparo/fronteira", 1, ocorrencias);
+
+        canhao.pararCanhao();
+        canhao.interrupt();
     }
 }

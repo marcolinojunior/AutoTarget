@@ -74,10 +74,9 @@ public class ReconciliacaoThread extends Thread {
             return;
         }
 
-        synchronized (sensorLock) {
-            avaliarPressaoTatica(Lado.ESQUERDO);
-            avaliarPressaoTatica(Lado.DIREITO);
-        }
+        avaliarPressaoTatica(Lado.ESQUERDO);
+        avaliarPressaoTatica(Lado.DIREITO);
+        long ultimoCicloReconciliacaoMs = System.currentTimeMillis();
 
         while (ativo) {
             long startNs = System.nanoTime();
@@ -85,13 +84,13 @@ public class ReconciliacaoThread extends Thread {
                 Thread.sleep(INTERVALO_TATICO);
                 if (!ativo) break;
 
-                synchronized (sensorLock) {
-                    avaliarPressaoTatica(Lado.ESQUERDO);
-                    avaliarPressaoTatica(Lado.DIREITO);
-                    ciclosTaticos++;
-                    if (ciclosTaticos % (INTERVALO_RECONCILIACAO / INTERVALO_TATICO) == 0) {
-                        executarReconciliacaoCompleta();
-                    }
+                avaliarPressaoTatica(Lado.ESQUERDO);
+                avaliarPressaoTatica(Lado.DIREITO);
+                ciclosTaticos++;
+                long agora = System.currentTimeMillis();
+                if (agora - ultimoCicloReconciliacaoMs >= INTERVALO_RECONCILIACAO) {
+                    executarReconciliacaoCompleta();
+                    ultimoCicloReconciliacaoMs = agora;
                 }
 
                 long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -124,7 +123,10 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private boolean executarReconciliacaoPorLado(Lado lado) {
-        if (sensorThread.getHistoricoCount(lado) < 3) return false;
+        if (sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
+            Log.d(TAG, "Pulando reconciliação: histórico insuficiente para lado " + lado.name());
+            return false;
+        }
 
         List<Canhao> canhoesLado = new ArrayList<>();
         synchronized (collisionLock) {
@@ -270,12 +272,27 @@ public class ReconciliacaoThread extends Thread {
                 Canhao.getAlphaPenalidade(), BETA,
                 Canhao.getIntervaloDisparoBase());
 
-        if (nLado < MAX_CANHOES_POR_LADO && energia > ENERGIA_SEGURA_MINIMA) {
-            double uMais1 = DataReconciliation.calcularUtilidade(
+        Double uMais1 = null;
+        if (nLado < MAX_CANHOES_POR_LADO) {
+            uMais1 = DataReconciliation.calcularUtilidade(
                     distMatrix, nLado + 1,
                     Canhao.getLimiarPenalidade(),
                     Canhao.getAlphaPenalidade(), BETA,
                     Canhao.getIntervaloDisparoBase());
+        }
+        Double uMenos1 = null;
+        if (nLado > 1) {
+            uMenos1 = DataReconciliation.calcularUtilidade(
+                    distMatrix, nLado - 1,
+                    Canhao.getLimiarPenalidade(),
+                    Canhao.getAlphaPenalidade(), BETA,
+                    Canhao.getIntervaloDisparoBase());
+        }
+        ReconciliationLog.getInstance().logUtilityComparison(
+                lado.name(), nLado, uAtual, uMais1, uMenos1, LIMIAR_GANHO, energia);
+
+        if (nLado < MAX_CANHOES_POR_LADO && energia > ENERGIA_SEGURA_MINIMA) {
+            if (uMais1 == null) return;
 
             double ganhoMarginal = uMais1 - uAtual;
             if (ganhoMarginal > LIMIAR_GANHO) {
@@ -290,11 +307,7 @@ public class ReconciliacaoThread extends Thread {
         }
 
         if (nLado > 1) {
-            double uMenos1 = DataReconciliation.calcularUtilidade(
-                    distMatrix, nLado - 1,
-                    Canhao.getLimiarPenalidade(),
-                    Canhao.getAlphaPenalidade(), BETA,
-                    Canhao.getIntervaloDisparoBase());
+            if (uMenos1 == null) return;
 
             double perdaMarginal = uAtual - uMenos1;
             boolean energiaCritica = energia < ENERGIA_CRITICA;
@@ -321,7 +334,7 @@ public class ReconciliacaoThread extends Thread {
                 float d = Alvo.calcularDistancia(c.getX(), c.getY(), r.x, r.y);
                 if (d < minDist) minDist = d;
             }
-            float peso = minDist;
+            float peso = 1f / Math.max(minDist, 1f);
             cx += r.x * peso;
             cy += r.y * peso;
             totalPeso += peso;
@@ -409,12 +422,31 @@ public class ReconciliacaoThread extends Thread {
             float[] clamped = clampParaLado(lado, novoX, novoY);
             float distMov = Alvo.calcularDistancia(canhao.getX(), canhao.getY(), clamped[0], clamped[1]);
             if (distMov > 20) {
+                float distanciaMediaAntes = distanciaMediaACluster(canhao.getX(), canhao.getY(), cluster);
+                float distanciaMediaDepois = distanciaMediaACluster(clamped[0], clamped[1], cluster);
+                float ganhoEsperado = distanciaMediaAntes - distanciaMediaDepois;
+                ReconciliationLog.getInstance().logAIDecision(
+                        "REALOCAR",
+                        "distMediaAntes=" + String.format(Locale.US, "%.2f", distanciaMediaAntes)
+                                + " distMediaDepois=" + String.format(Locale.US, "%.2f", distanciaMediaDepois)
+                                + " ganho=" + String.format(Locale.US, "%.2f", ganhoEsperado),
+                        clamped[0], clamped[1], distanciaMediaAntes, distanciaMediaDepois);
                 canhao.moverPara(clamped[0], clamped[1]);
                 if (listener != null) {
                     listener.onRealocarCanhao(canhao, clamped[0], clamped[1]);
                 }
             }
         }
+    }
+
+    private float distanciaMediaACluster(float x, float y,
+                                         List<DataReconciliation.ReconciliationResult> cluster) {
+        if (cluster.isEmpty()) return 0;
+        float soma = 0;
+        for (DataReconciliation.ReconciliationResult r : cluster) {
+            soma += Alvo.calcularDistancia(x, y, r.x, r.y);
+        }
+        return soma / cluster.size();
     }
 
     private float[] clampParaLado(Lado lado, float x, float y) {

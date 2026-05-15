@@ -63,6 +63,7 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.SparseArray;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -97,6 +98,15 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     private final Paint paintLixeira = new Paint();
     /** Paint para labels dos campos. */
     private final Paint paintLabel = new Paint();
+    /** Paint para texto da lixeira durante drag. */
+    private final Paint paintLixeiraTexto = new Paint();
+    /** Paint para texto alinhado à direita no HUD. */
+    private final Paint paintTextoDireita = new Paint();
+    /** Paints reutilizáveis para a tela de fim de jogo. */
+    private final Paint paintOverlayFim = new Paint();
+    private final Paint paintBoxFim = new Paint();
+    private final Paint paintBordaFim = new Paint();
+    private final Paint paintTextoFim = new Paint();
 
     private final Paint paintAlvoComum;
     private final Paint paintAlvoRapido;
@@ -112,6 +122,12 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     private final Paint paintEnergiaBarraDir;
     private final Paint paintEnergiaFundo;
     private final Paint paintTempoBarra;
+    private final SparseArray<Paint> paintAlvoCache = new SparseArray<>();
+    private final SparseArray<Paint> paintGlowCache = new SparseArray<>();
+    private final RectF hudRect = new RectF();
+    private final RectF hudRectAux = new RectF();
+    private final RectF fimBoxRect = new RectF();
+    private final Path pathCanhao = new Path();
 
     private static final int TARGET_FPS = 30;
 
@@ -235,6 +251,31 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         paintLabel.setTextSize(18f);
         paintLabel.setAntiAlias(true);
         paintLabel.setTextAlign(Paint.Align.CENTER);
+
+        paintLixeiraTexto.setColor(Color.parseColor("#CCFFFFFF"));
+        paintLixeiraTexto.setTextSize(22f);
+        paintLixeiraTexto.setAntiAlias(true);
+        paintLixeiraTexto.setTextAlign(Paint.Align.CENTER);
+
+        paintTextoDireita.setAntiAlias(true);
+        paintTextoDireita.setTextAlign(Paint.Align.RIGHT);
+
+        paintOverlayFim.setColor(Color.parseColor("#CC1A1A2E"));
+        paintOverlayFim.setStyle(Paint.Style.FILL);
+
+        paintBoxFim.setColor(Color.parseColor("#16213E"));
+        paintBoxFim.setStyle(Paint.Style.FILL);
+
+        paintBordaFim.setColor(Color.parseColor("#E94560"));
+        paintBordaFim.setStyle(Paint.Style.STROKE);
+        paintBordaFim.setStrokeWidth(3f);
+
+        paintTextoFim.setColor(Color.WHITE);
+        paintTextoFim.setAntiAlias(true);
+        paintTextoFim.setTextAlign(Paint.Align.CENTER);
+
+        registrarPaintAlvo(0xFF4CAF50);
+        registrarPaintAlvo(0xFFFF9800);
     }
 
     // ── SurfaceHolder.Callback ───────────────────────────────────
@@ -363,18 +404,16 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         // ── Zona de Lixeira (visível durante arrastar) ──
         if (isDragging) {
             canvas.drawRect(0, h - ALTURA_LIXEIRA, meioX, h, paintLixeira);
-            Paint lixTxt = new Paint(paintLabel);
-            lixTxt.setColor(Color.parseColor("#CCFFFFFF"));
-            lixTxt.setTextSize(22f);
-            canvas.drawText("\uD83D\uDDD1 SOLTE AQUI PARA REMOVER", meioX / 2f, h - ALTURA_LIXEIRA / 2f + 8, lixTxt);
+            canvas.drawText("\uD83D\uDDD1 SOLTE AQUI PARA REMOVER",
+                    meioX / 2f, h - ALTURA_LIXEIRA / 2f + 8, paintLixeiraTexto);
         }
 
         // ── Alvos (renderização polimórfica via getCorId()) ──
         for (Alvo alvo : jogo.getAlvos()) {
             if (!alvo.isAtivo()) continue;
-            Paint paint = paintForColor(alvo.getCorId());
-
-            canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio() + 4, createGlowPaint(paint));
+            int corAlvo = alvo.getCorId();
+            Paint paint = paintForColor(corAlvo);
+            canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio() + 4, glowForColor(corAlvo));
             canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio(), paint);
         }
 
@@ -424,26 +463,29 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
         // ── Barra de tempo (toda a largura) ──
         float tempoRatio = (float) tempo / Jogo.DURACAO_PARTIDA_SEGUNDOS;
-        canvas.drawRoundRect(new RectF(pad, 40, w - pad, 46), 3, 3, paintEnergiaFundo);
+        hudRect.set(pad, 40, w - pad, 46);
+        canvas.drawRoundRect(hudRect, 3, 3, paintEnergiaFundo);
         if (tempoRatio > 0) {
-            canvas.drawRoundRect(new RectF(pad, 40, pad + (w - 2 * pad) * tempoRatio, 46),
-                    3, 3, paintTempoBarra);
+            hudRectAux.set(pad, 40, pad + (w - 2 * pad) * tempoRatio, 46);
+            canvas.drawRoundRect(hudRectAux, 3, 3, paintTempoBarra);
         }
 
         // ── Energia esquerda ──
         float eEsq = jogo.getEnergiaEsquerdo() / Jogo.getEnergiaMaxima();
-        canvas.drawRoundRect(new RectF(pad, 52, meioX - 6, 58), 3, 3, paintEnergiaFundo);
+        hudRect.set(pad, 52, meioX - 6, 58);
+        canvas.drawRoundRect(hudRect, 3, 3, paintEnergiaFundo);
         if (eEsq > 0) {
-            canvas.drawRoundRect(new RectF(pad, 52, pad + (meioX - pad - 6) * eEsq, 58),
-                    3, 3, paintEnergiaBarraEsq);
+            hudRectAux.set(pad, 52, pad + (meioX - pad - 6) * eEsq, 58);
+            canvas.drawRoundRect(hudRectAux, 3, 3, paintEnergiaBarraEsq);
         }
 
         // ── Energia direita ──
         float eDir = jogo.getEnergiaDireito() / Jogo.getEnergiaMaxima();
-        canvas.drawRoundRect(new RectF(meioX + 6, 52, w - pad, 58), 3, 3, paintEnergiaFundo);
+        hudRect.set(meioX + 6, 52, w - pad, 58);
+        canvas.drawRoundRect(hudRect, 3, 3, paintEnergiaFundo);
         if (eDir > 0) {
-            canvas.drawRoundRect(new RectF(meioX + 6, 52, meioX + 6 + (w - pad - meioX - 6) * eDir, 58),
-                    3, 3, paintEnergiaBarraDir);
+            hudRectAux.set(meioX + 6, 52, meioX + 6 + (w - pad - meioX - 6) * eDir, 58);
+            canvas.drawRoundRect(hudRectAux, 3, 3, paintEnergiaBarraDir);
         }
 
         // ── Pontuações ──
@@ -453,10 +495,10 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
                 pad, 75, paintTexto);
 
         paintTexto.setColor(Color.parseColor("#E94560"));
-        Paint rightPaint = new Paint(paintTexto);
-        rightPaint.setTextAlign(Paint.Align.RIGHT);
+        paintTextoDireita.setColor(paintTexto.getColor());
+        paintTextoDireita.setTextSize(paintTexto.getTextSize());
         canvas.drawText("Pts:" + jogo.getPontuacaoDireito() + "  ⚡" + (int) jogo.getEnergiaDireito(),
-                w - pad, 75, rightPaint);
+                w - pad, 75, paintTextoDireita);
         paintTexto.setTextSize(24f);
     }
 
@@ -465,73 +507,60 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         int h = canvas.getHeight();
 
         // Overlay
-        Paint overlay = new Paint();
-        overlay.setColor(Color.parseColor("#CC1A1A2E"));
-        canvas.drawRect(0, 0, w, h, overlay);
+        canvas.drawRect(0, 0, w, h, paintOverlayFim);
 
         // Box
         float boxL = w * 0.08f, boxR = w * 0.92f;
         float boxT = h * 0.25f, boxB = h * 0.65f;
 
-        Paint boxPaint = new Paint();
-        boxPaint.setColor(Color.parseColor("#16213E"));
-        boxPaint.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(new RectF(boxL, boxT, boxR, boxB), 16, 16, boxPaint);
+        fimBoxRect.set(boxL, boxT, boxR, boxB);
+        canvas.drawRoundRect(fimBoxRect, 16, 16, paintBoxFim);
+        canvas.drawRoundRect(fimBoxRect, 16, 16, paintBordaFim);
 
-        Paint borderPaint = new Paint();
-        borderPaint.setColor(Color.parseColor("#E94560"));
-        borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(3f);
-        canvas.drawRoundRect(new RectF(boxL, boxT, boxR, boxB), 16, 16, borderPaint);
-
-        Paint text = new Paint();
-        text.setColor(Color.WHITE);
-        text.setAntiAlias(true);
-        text.setTextAlign(Paint.Align.CENTER);
-
-        text.setTextSize(42f);
-        canvas.drawText("FIM DE JOGO", w / 2f, boxT + 50, text);
+        paintTextoFim.setTextSize(42f);
+        paintTextoFim.setColor(Color.WHITE);
+        canvas.drawText("FIM DE JOGO", w / 2f, boxT + 50, paintTextoFim);
 
         // Scores
         int pE = jogo.getPontuacaoEsquerdo();
         int pD = jogo.getPontuacaoDireito();
 
-        text.setTextSize(30f);
-        text.setColor(Color.parseColor("#00B4D8"));
-        canvas.drawText("Esquerdo: " + pE, w / 2f, boxT + 100, text);
-        text.setColor(Color.parseColor("#E94560"));
-        canvas.drawText("Direito: " + pD, w / 2f, boxT + 140, text);
+        paintTextoFim.setTextSize(30f);
+        paintTextoFim.setColor(Color.parseColor("#00B4D8"));
+        canvas.drawText("Esquerdo: " + pE, w / 2f, boxT + 100, paintTextoFim);
+        paintTextoFim.setColor(Color.parseColor("#E94560"));
+        canvas.drawText("Direito: " + pD, w / 2f, boxT + 140, paintTextoFim);
 
         // Vencedor
-        text.setTextSize(34f);
-        text.setColor(Color.parseColor("#FFD700"));
+        paintTextoFim.setTextSize(34f);
+        paintTextoFim.setColor(Color.parseColor("#FFD700"));
         String vencedor;
         if (pE > pD) vencedor = "🏆 Esquerdo Vence!";
         else if (pD > pE) vencedor = "🏆 Direito Vence!";
         else vencedor = "🤝 Empate!";
-        canvas.drawText(vencedor, w / 2f, boxT + 190, text);
+        canvas.drawText(vencedor, w / 2f, boxT + 190, paintTextoFim);
 
-        text.setTextSize(22f);
-        text.setColor(Color.parseColor("#AAAAAA"));
-        canvas.drawText("Toque em Iniciar para jogar novamente", w / 2f, boxB - 20, text);
+        paintTextoFim.setTextSize(22f);
+        paintTextoFim.setColor(Color.parseColor("#AAAAAA"));
+        canvas.drawText("Toque em Iniciar para jogar novamente", w / 2f, boxB - 20, paintTextoFim);
     }
 
     private void desenharCanhao(Canvas canvas, Canhao canhao, Paint paint) {
         float tamanho = 25f;
         float angRad = (float) Math.toRadians(canhao.getAngulo());
 
-        Path path = new Path();
-        path.moveTo(
+        pathCanhao.reset();
+        pathCanhao.moveTo(
                 canhao.getX() + (float) Math.cos(angRad) * tamanho * 1.5f,
                 canhao.getY() + (float) Math.sin(angRad) * tamanho * 1.5f);
-        path.lineTo(
+        pathCanhao.lineTo(
                 canhao.getX() + (float) Math.cos(angRad + 2.4f) * tamanho,
                 canhao.getY() + (float) Math.sin(angRad + 2.4f) * tamanho);
-        path.lineTo(
+        pathCanhao.lineTo(
                 canhao.getX() + (float) Math.cos(angRad - 2.4f) * tamanho,
                 canhao.getY() + (float) Math.sin(angRad - 2.4f) * tamanho);
-        path.close();
-        canvas.drawPath(path, paint);
+        pathCanhao.close();
+        canvas.drawPath(pathCanhao, paint);
     }
 
     private void desenharGrid(Canvas canvas) {
@@ -542,26 +571,37 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
             canvas.drawLine(0, y, canvas.getWidth(), y, paintGrid);
     }
 
-    private Paint createGlowPaint(Paint base) {
+    private void registrarPaintAlvo(int color) {
+        if (paintAlvoCache.get(color) != null && paintGlowCache.get(color) != null) return;
+
+        Paint base = new Paint();
+        base.setColor(color);
+        base.setAntiAlias(true);
+        base.setStyle(Paint.Style.FILL);
+
         Paint glow = new Paint(base);
         glow.setAlpha(60);
-        return glow;
+
+        paintAlvoCache.put(color, base);
+        paintGlowCache.put(color, glow);
     }
 
-    /**
-     * Retorna um Paint configurado com a cor especificada.
-     * Usado para renderização polimórfica de alvos via getCorId(),
-     * eliminando a necessidade de instanceof na View.
-     *
-     * @param color cor ARGB (ex: 0xFF4CAF50)
-     * @return Paint configurado
-     */
     private Paint paintForColor(int color) {
-        Paint paint = new Paint();
-        paint.setColor(color);
-        paint.setAntiAlias(true);
-        paint.setStyle(Paint.Style.FILL);
+        Paint paint = paintAlvoCache.get(color);
+        if (paint == null) {
+            registrarPaintAlvo(color);
+            paint = paintAlvoCache.get(color);
+        }
         return paint;
+    }
+
+    private Paint glowForColor(int color) {
+        Paint glow = paintGlowCache.get(color);
+        if (glow == null) {
+            registrarPaintAlvo(color);
+            glow = paintGlowCache.get(color);
+        }
+        return glow;
     }
 
     // ── Thread de renderização ───────────────────────────────────

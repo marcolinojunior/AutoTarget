@@ -62,4 +62,51 @@ public class DataReconciliationTest {
         double[][] a = DataReconciliation.construirMatrizIncidenciaPorLimiar(medias, 10.0);
         assertNull(a);
     }
+
+    @Test
+    public void testReconcileUsaPseudoInverseQuandoSingular() {
+        double[] y = {2.0, 3.0, 4.0};
+        double[][] V = {
+                {1.0, 0.0, 0.0},
+                {0.0, 1.0, 0.0},
+                {0.0, 0.0, 1.0}
+        };
+        // Linhas dependentes -> A*V*A^T singular
+        double[][] A = {
+                {1.0, -1.0, 0.0},
+                {2.0, -2.0, 0.0}
+        };
+
+        double[] yHat = DataReconciliation.reconcile(y, V, A);
+        assertNotNull(yHat);
+        assertEquals(3, yHat.length);
+        for (double v : yHat) {
+            assertTrue(Double.isFinite(v));
+        }
+    }
+
+    @Test
+    public void testReconciliarFallbackQuandoMenosDeQuatroCanhoes() {
+        DataReconciliation dr = new DataReconciliation();
+        float[] canhoesX = {0f, 100f, 0f};
+        float[] canhoesY = {0f, 0f, 100f};
+        float[][] media = {{70f, 50f, 50f}};
+        float[][] variancia = {{1f, 1f, 1f}};
+
+        DataReconciliation.ReconciliationResult[] out = dr.reconciliar(canhoesX, canhoesY, media, variancia);
+        assertNotNull(out);
+        assertEquals(1, out.length);
+    }
+
+    @Test
+    public void testReconciliarComCanhoesColinearesNaoFalha() {
+        DataReconciliation dr = new DataReconciliation();
+        float[] canhoesX = {0f, 100f, 200f, 300f};
+        float[] canhoesY = {0f, 0f, 0f, 0f};
+        float[][] media = {{150f, 70f, 70f, 150f}};
+        float[][] variancia = {{2f, 2f, 2f, 2f}};
+
+        DataReconciliation.ReconciliationResult[] out = dr.reconciliar(canhoesX, canhoesY, media, variancia);
+        assertNotNull(out);
+    }
 }

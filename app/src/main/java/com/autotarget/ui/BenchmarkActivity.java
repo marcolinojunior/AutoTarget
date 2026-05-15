@@ -142,22 +142,24 @@ public class BenchmarkActivity extends AppCompatActivity {
 
         resultadosTexto.add("═══ BENCHMARK ESCALABILIDADE ═══");
         resultadosTexto.add("Alvos: " + numAlvos + " | Duração: 30s");
-        resultadosTexto.add("Configurações: 1, 2, 4, todos os núcleos");
+        int availableCores = Math.max(1, Runtime.getRuntime().availableProcessors());
+        resultadosTexto.add("Configurações: 1, 2, todos os núcleos reais (" + availableCores + ")");
         resultadosTexto.add("");
 
         new Thread(() -> {
-            int[] coreConfigs = {1, 2, 4, 8};
-            int[] masks = {
-                    ThreadAffinityHelper.SINGLE_CORE,
-                    0x03,
-                    ThreadAffinityHelper.LITTLE_CORES,
-                    ThreadAffinityHelper.ALL_CORES
-            };
+            List<Integer> coreConfigs = new ArrayList<>();
+            coreConfigs.add(1);
+            if (availableCores >= 2) {
+                coreConfigs.add(2);
+            }
+            if (!coreConfigs.contains(availableCores)) {
+                coreConfigs.add(availableCores);
+            }
 
             long t1 = 0;
-            for (int i = 0; i < coreConfigs.length; i++) {
-                int cores = coreConfigs[i];
-                int mask = masks[i];
+            for (int i = 0; i < coreConfigs.size(); i++) {
+                int cores = coreConfigs.get(i);
+                int mask = buildAffinityMask(cores, availableCores);
                 updateStatus("Rodando com " + cores + " core(s)...");
 
                 if (ThreadAffinityHelper.isAvailable()) {
@@ -199,6 +201,14 @@ public class BenchmarkActivity extends AppCompatActivity {
                 btnIniciar.setEnabled(true);
             });
         }, "BenchmarkRunner").start();
+    }
+
+    private int buildAffinityMask(int coresToUse, int availableCores) {
+        int efetivos = Math.max(1, Math.min(coresToUse, availableCores));
+        if (efetivos >= Integer.SIZE - 1) {
+            return -1;
+        }
+        return (1 << efetivos) - 1;
     }
 
     private long executarCargaTrabalho() {

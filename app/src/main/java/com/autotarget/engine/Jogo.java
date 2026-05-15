@@ -285,6 +285,7 @@ public class Jogo {
 
                 atualizarEnergia();
                 aplicarPenalidades();
+                registrarMetricasEnergiaPenalidade();
                 notificarTempo();
                 notificarEnergia();
 
@@ -453,12 +454,33 @@ public class Jogo {
         }
     }
 
+    private void registrarMetricasEnergiaPenalidade() {
+        int canhoesEsq = contarCanhoesAtivos(Lado.ESQUERDO);
+        int canhoesDir = contarCanhoesAtivos(Lado.DIREITO);
+        double intervaloEsq = calcularIntervaloMedio(canhoesEsquerdo);
+        double intervaloDir = calcularIntervaloMedio(canhoesDireito);
+        ReconciliationLog.getInstance().logEnergyPenalty(
+                energiaEsquerdo, energiaDireito, canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
+    }
+
+    private double calcularIntervaloMedio(CopyOnWriteArrayList<Canhao> canhoes) {
+        if (canhoes == null || canhoes.isEmpty()) return 0;
+        double soma = 0;
+        int ativos = 0;
+        for (Canhao c : canhoes) {
+            if (!c.isAtivo()) continue;
+            soma += c.getIntervaloDisparo();
+            ativos++;
+        }
+        return ativos == 0 ? 0 : (soma / ativos);
+    }
+
     private void desativarUltimoCanhao(Lado lado) {
         CopyOnWriteArrayList<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
         for (int i = lista.size() - 1; i >= 0; i--) {
             Canhao c = lista.get(i);
             if (c.isAtivo()) {
-                c.pararCanhao();
+                pararCanhaoComJoin(c, 300);
                 break;
             }
         }
@@ -490,8 +512,7 @@ public class Jogo {
      */
     public void removerCanhao(Canhao canhao) {
         if (canhao == null) return;
-        canhao.pararCanhao();
-        canhao.interrupt();
+        pararCanhaoComJoin(canhao, 500);
         synchronized (listLock) {
             if (canhao.getLado() == Lado.ESQUERDO) {
                 canhoesEsquerdo.remove(canhao);
@@ -639,9 +660,7 @@ public class Jogo {
                 larguraTela, alturaTela, this);
 
         // Penalty check
-        if (countLado >= LIMIAR_PENALIDADE) {
-            canhao.aplicarPenalidade(true);
-        }
+        canhao.aplicarPenalidade(countLado + 1);
 
         listaCanhoes.add(canhao);
 
@@ -710,19 +729,43 @@ public class Jogo {
      * que cruzam a linha central da tela.
      */
     private void transferirAlvosCruzados() {
-        synchronized (listLock) {
-            for (Alvo alvo : alvosEsquerdo) {
-                if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
-                    alvosEsquerdo.remove(alvo);
-                    alvosDireito.add(alvo);
+        if (larguraTela <= 0) return;
+        List<Alvo> moverParaDireita = new ArrayList<>();
+        List<Alvo> moverParaEsquerda = new ArrayList<>();
+
+        synchronized (collisionLock) {
+            synchronized (listLock) {
+                for (Alvo alvo : alvosEsquerdo) {
+                    if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
+                        moverParaDireita.add(alvo);
+                    }
+                }
+                for (Alvo alvo : alvosDireito) {
+                    if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
+                        moverParaEsquerda.add(alvo);
+                    }
+                }
+
+                if (!moverParaDireita.isEmpty()) {
+                    alvosEsquerdo.removeAll(moverParaDireita);
+                    alvosDireito.addAll(moverParaDireita);
+                    for (Alvo alvo : moverParaDireita) {
+                        liberarAlvo(alvo);
+                    }
+                }
+                if (!moverParaEsquerda.isEmpty()) {
+                    alvosDireito.removeAll(moverParaEsquerda);
+                    alvosEsquerdo.addAll(moverParaEsquerda);
+                    for (Alvo alvo : moverParaEsquerda) {
+                        liberarAlvo(alvo);
+                    }
                 }
             }
-            for (Alvo alvo : alvosDireito) {
-                if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
-                    alvosDireito.remove(alvo);
-                    alvosEsquerdo.add(alvo);
-                }
-            }
+        }
+
+        if (!moverParaDireita.isEmpty() || !moverParaEsquerda.isEmpty()) {
+            Log.d("Jogo", "Transferência de alvos: ESQ->DIR=" + moverParaDireita.size()
+                    + " DIR->ESQ=" + moverParaEsquerda.size());
         }
     }
 
@@ -746,36 +789,49 @@ public class Jogo {
 
         int destruidos = 0;
         synchronized (collisionLock) {
-            for (Alvo alvo : getAllAlvos()) {
-                if (!alvo.isAtivo()) destruidos++;
+            if (!alvosEsquerdo.isEmpty() || !alvosDireito.isEmpty()) {
+                synchronized (listLock) {
+                    destruidos += processarAlvosInativos(alvosEsquerdo, Lado.ESQUERDO);
+                    destruidos += processarAlvosInativos(alvosDireito, Lado.DIREITO);
+                }
             }
         }
 
         if (destruidos > 0) {
-            synchronized (listLock) {
-                for (Alvo alvo : alvosEsquerdo) {
-                    if (!alvo.isAtivo()) {
-                        pontuacaoEsquerdo += calcularPontosAbate(alvo);
-                        energiaEsquerdo = Math.min(ENERGIA_MAXIMA,
-                                energiaEsquerdo + calcularEnergiaRegenerada(alvo));
-                        alvosEsquerdo.remove(alvo);
-                    }
-                }
-                for (Alvo alvo : alvosDireito) {
-                    if (!alvo.isAtivo()) {
-                        pontuacaoDireito += calcularPontosAbate(alvo);
-                        energiaDireito = Math.min(ENERGIA_MAXIMA,
-                                energiaDireito + calcularEnergiaRegenerada(alvo));
-                        alvosDireito.remove(alvo);
-                    }
-                }
-            }
             notificarPontuacao();
             notificarEnergia();
         }
 
         notificarAlvosAtivos();
         return destruidos;
+    }
+
+    private int processarAlvosInativos(CopyOnWriteArrayList<Alvo> lista, Lado lado) {
+        if (lista.isEmpty()) return 0;
+        List<Alvo> removidos = new ArrayList<>();
+        int pontos = 0;
+        float energiaRegenerada = 0f;
+
+        for (Alvo alvo : lista) {
+            if (!alvo.isAtivo()) {
+                pontos += calcularPontosAbate(alvo);
+                energiaRegenerada += calcularEnergiaRegenerada(alvo);
+                removidos.add(alvo);
+                liberarAlvo(alvo);
+            }
+        }
+
+        if (!removidos.isEmpty()) {
+            lista.removeAll(removidos);
+            if (lado == Lado.ESQUERDO) {
+                pontuacaoEsquerdo += pontos;
+                energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + energiaRegenerada);
+            } else {
+                pontuacaoDireito += pontos;
+                energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + energiaRegenerada);
+            }
+        }
+        return removidos.size();
     }
 
     // ── Pontuação com Penalidade Temporal ─────────────────────────
@@ -826,17 +882,42 @@ public class Jogo {
     }
 
     private void pararTodasThreads() {
-        for (Alvo a : getAllAlvos()) { a.setAtivo(false); a.interrupt(); }
-        for (Canhao c : getAllCanhoes()) { c.pararCanhao(); c.interrupt(); }
-        if (sensorThread != null) { sensorThread.setAtivo(false); sensorThread.interrupt(); }
-        if (reconciliacaoThread != null) { reconciliacaoThread.setAtivo(false); reconciliacaoThread.interrupt(); }
+        for (Alvo a : getAllAlvos()) {
+            a.setAtivo(false);
+            interromperEEsperar(a, 200);
+        }
+        for (Canhao c : getAllCanhoes()) {
+            pararCanhaoComJoin(c, 400);
+        }
+        if (sensorThread != null) {
+            sensorThread.setAtivo(false);
+            interromperEEsperar(sensorThread, 500);
+        }
+        if (reconciliacaoThread != null) {
+            reconciliacaoThread.setAtivo(false);
+            interromperEEsperar(reconciliacaoThread, 500);
+        }
         if (thermalSensorService != null) { thermalSensorService.parar(); }
         if (firebaseIOThread != null) {
-            new Thread(() -> {
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                firebaseIOThread.setAtivo(false);
-                firebaseIOThread.interrupt();
-            }, "FirebaseShutdown").start();
+            firebaseIOThread.setAtivo(false);
+            interromperEEsperar(firebaseIOThread, 1000);
+        }
+    }
+
+    private void pararCanhaoComJoin(Canhao canhao, long timeoutMs) {
+        if (canhao == null) return;
+        canhao.pararCanhao();
+        interromperEEsperar(canhao, timeoutMs);
+    }
+
+    private void interromperEEsperar(Thread thread, long timeoutMs) {
+        if (thread == null) return;
+        thread.interrupt();
+        if (!thread.isAlive() || Thread.currentThread() == thread) return;
+        try {
+            thread.join(timeoutMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
