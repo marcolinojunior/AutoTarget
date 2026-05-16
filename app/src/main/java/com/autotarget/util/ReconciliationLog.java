@@ -236,6 +236,11 @@ public final class ReconciliationLog {
             sb.append(String.format(Locale.US, "Reducao media de MSE: %.2f%%\n", reducao));
             sb.append(String.format(Locale.US, "Erro medio de posicao: %.2f px\n", mediaErroPos));
             sb.append(String.format(Locale.US, "Norma media ||A*y_hat||: %.6f\n", mediaNormA));
+            sb.append("\n[EVIDENCIA C0-07] Comparacao Antes/Depois (Bruto vs Reconciliado):\n");
+            for(int i = 0; i < n; i += Math.max(1, n / 5)) {
+                 ReconSample s = reconSamples.get(i);
+                 sb.append(String.format(Locale.US, "  - [%s] MSE_bruto: %.2f => MSE_recon: %.2f (ErroPos=%.2f)\n", s.lado, s.mseBruto, s.mseRecon, s.erroPos));
+            }
         }
 
         if (!energySamples.isEmpty()) {
@@ -262,6 +267,11 @@ public final class ReconciliationLog {
             sb.append(String.format(Locale.US, "Intervalo medio DIR: %.2f ms\n", mediaIntervaloDir));
             sb.append(String.format(Locale.US, "Energia final ESQ: %.1f | DIR: %.1f\n", energiaFinalEsq, energiaFinalDir));
             sb.append(String.format(Locale.US, "Canhoes finais ESQ: %d | DIR: %d\n", canhoesFinaisEsq, canhoesFinaisDir));
+            sb.append("\n[EVIDENCIA C0-07] Historico de Energia e Penalidade:\n");
+            for (int i = 0; i < n; i += Math.max(1, n / 10)) {
+                EnergyPenaltySample s = energySamples.get(i);
+                sb.append(String.format(Locale.US, "  - Esq(E=%.1f, C=%d, I=%.1fms) | Dir(E=%.1f, C=%d, I=%.1fms)\n", s.energiaEsq, s.canhoesEsq, s.intervaloEsqMs, s.energiaDir, s.canhoesDir, s.intervaloDirMs));
+            }
         }
 
         if (!utilitySamples.isEmpty()) {
