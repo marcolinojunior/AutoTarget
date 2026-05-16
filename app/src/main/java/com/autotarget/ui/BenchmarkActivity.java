@@ -373,6 +373,10 @@ public class BenchmarkActivity extends AppCompatActivity {
                 float tempoRatio = (float) s.elapsedMs / maxTempo;
                 float tempoH = tempoRatio * (bottom - top - 18f);
                 float tx = baseX + barW + 8f;
+
+                // Após plotar barras, pintar Deadline Misses como Alerta:
+                boolean hasDeadlineMiss = s.elapsedMs > 16; // ex: 16ms deadline para physics
+                paintTempo.setColor(hasDeadlineMiss ? Color.RED : Color.parseColor("#E94560"));
                 canvas.drawRect(tx, bottom - tempoH, tx + barW, bottom, paintTempo);
 
                 canvas.drawText("N=" + s.cores, baseX - 2f, bottom + 22f, paintText);

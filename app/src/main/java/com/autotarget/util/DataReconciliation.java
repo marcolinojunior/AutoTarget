@@ -80,7 +80,7 @@ public class DataReconciliation {
         int N = canhoesX.length;    // número de canhões
         int M = mediaDistancias.length; // número de alvos
 
-        if (N < 4) {
+        if (N < 4 || M == 0) {
             // Com N<4, não há espaço nulo — estimar posição diretamente via OLS
             Log.w(TAG, "N=" + N + " < 4: reconciliação não aplicável, usando OLS direto");
             return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
@@ -200,7 +200,8 @@ public class DataReconciliation {
 
         // Fallback robusto: se não houver conexões válidas no limiar,
         // mantém a estratégia por espaço nulo já validada.
-        if (A_arr == null || A_arr.length == 0) {
+        if (A_arr == null || A_arr.length == 0 || y_arr.length < 3) {
+            Log.w(TAG, "Cenário não reconciliável, caindo para estimativas simples.");
             A_arr = new double[C.getNumRows()][C.getNumCols()];
             for (int r = 0; r < C.getNumRows(); r++) {
                 for (int c = 0; c < C.getNumCols(); c++) {
