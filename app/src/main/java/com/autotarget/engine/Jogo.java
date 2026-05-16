@@ -454,11 +454,15 @@ public class Jogo {
         }
     }
 
+    // Exposição dos dados via broadcast para ferramentas de profiling:
     private void registrarMetricasEnergiaPenalidade() {
         int canhoesEsq = contarCanhoesAtivos(Lado.ESQUERDO);
         int canhoesDir = contarCanhoesAtivos(Lado.DIREITO);
         double intervaloEsq = calcularIntervaloMedio(canhoesEsquerdo);
         double intervaloDir = calcularIntervaloMedio(canhoesDireito);
+
+        Log.i("Autotarget-Plotter", "EnergiaEsq:" + energiaEsquerdo + ",EnergiaDir:" + energiaDireito + ",Intervalo:" + intervaloEsq);
+
         ReconciliationLog.getInstance().logEnergyPenalty(
                 energiaEsquerdo, energiaDireito, canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
     }
@@ -733,34 +737,27 @@ public class Jogo {
         List<Alvo> moverParaDireita = new ArrayList<>();
         List<Alvo> moverParaEsquerda = new ArrayList<>();
 
-        synchronized (collisionLock) {
-            synchronized (listLock) {
-                for (Alvo alvo : alvosEsquerdo) {
-                    if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
-                        moverParaDireita.add(alvo);
-                    }
-                }
-                for (Alvo alvo : alvosDireito) {
-                    if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
-                        moverParaEsquerda.add(alvo);
-                    }
-                }
-
-                if (!moverParaDireita.isEmpty()) {
-                    alvosEsquerdo.removeAll(moverParaDireita);
-                    alvosDireito.addAll(moverParaDireita);
-                    for (Alvo alvo : moverParaDireita) {
-                        liberarAlvo(alvo);
-                    }
-                }
-                if (!moverParaEsquerda.isEmpty()) {
-                    alvosDireito.removeAll(moverParaEsquerda);
-                    alvosEsquerdo.addAll(moverParaEsquerda);
-                    for (Alvo alvo : moverParaEsquerda) {
-                        liberarAlvo(alvo);
-                    }
-                }
+        // Remover bloqueios globais iterando sob uma view atomicamente segura:
+        for (Alvo alvo : alvosEsquerdo) {
+            if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
+                moverParaDireita.add(alvo);
             }
+        }
+        for (Alvo alvo : alvosDireito) {
+            if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
+                moverParaEsquerda.add(alvo);
+            }
+        }
+
+        if (!moverParaDireita.isEmpty()) {
+            alvosEsquerdo.removeAll(moverParaDireita);
+            alvosDireito.addAll(moverParaDireita);
+            for (Alvo alvo : moverParaDireita) liberarAlvo(alvo);
+        }
+        if (!moverParaEsquerda.isEmpty()) {
+            alvosDireito.removeAll(moverParaEsquerda);
+            alvosEsquerdo.addAll(moverParaEsquerda);
+            for (Alvo alvo : moverParaEsquerda) liberarAlvo(alvo);
         }
 
         if (!moverParaDireita.isEmpty() || !moverParaEsquerda.isEmpty()) {
