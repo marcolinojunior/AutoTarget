@@ -245,7 +245,11 @@ public class Canhao extends Thread {
                 this.angulo = 0f;
             }
 
-                Projetil projetil = new Projetil(
+                Projetil projetil = com.autotarget.util.ProjetilPool.obter();
+                if (projetil == null) {
+                    projetil = new Projetil();
+                }
+                projetil.reutilizar(
                     this.x, this.y, dirX, dirY,
                     VELOCIDADE_PROJETIL, alvos, collisionLock,
                     larguraTela, alturaTela, jogo, this.lado,
@@ -270,7 +274,14 @@ public class Canhao extends Thread {
 
     private void limparProjetisInativos() {
         synchronized (projeteis) {
-            projeteis.removeIf(p -> !p.isAtivo());
+            java.util.Iterator<Projetil> it = projeteis.iterator();
+            while (it.hasNext()) {
+                Projetil p = it.next();
+                if (!p.isAtivo()) {
+                    it.remove();
+                    com.autotarget.util.ProjetilPool.liberar(p);
+                }
+            }
         }
     }
 
@@ -280,8 +291,12 @@ public class Canhao extends Thread {
      */
     public void onProjetilFinished(Projetil p) {
         if (p == null) return;
+        boolean removed = false;
         synchronized (projeteis) {
-            projeteis.remove(p);
+            removed = projeteis.remove(p);
+        }
+        if (removed) {
+            com.autotarget.util.ProjetilPool.liberar(p);
         }
     }
 

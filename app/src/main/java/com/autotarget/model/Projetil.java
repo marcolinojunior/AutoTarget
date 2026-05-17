@@ -75,25 +75,25 @@ public class Projetil implements Runnable {
     private static final int INTERVALO_ATUALIZACAO = 16;
 
     /** Referência à lista compartilhada de alvos (região crítica). */
-    private final List<Alvo> alvos;
+    private List<Alvo> alvos;
 
     /** Lock para região crítica de colisão. */
-    private final Object collisionLock;
+    private Object collisionLock;
 
     /** Limites da tela. */
-    private final int larguraTela;
-    private final int alturaTela;
+    private int larguraTela;
+    private int alturaTela;
 
     /** Referência ao motor do jogo para QuadTree. */
-    private final com.autotarget.engine.Jogo jogo;
+    private com.autotarget.engine.Jogo jogo;
     
     /** Lado ao qual este projétil pertence. */
-    private final com.autotarget.model.Lado lado;
+    private com.autotarget.model.Lado lado;
 
     /** Alvo reservado para este tiro. Liberado ao errar (sair da tela). */
-    private final Alvo alvoReservado;
+    private Alvo alvoReservado;
     /** Canhão dono deste projétil (callback para remoção imediata). */
-    private final com.autotarget.model.Canhao owner;
+    private com.autotarget.model.Canhao owner;
 
     // ── Construtor ───────────────────────────────────────────────
 
@@ -130,6 +130,38 @@ public class Projetil implements Runnable {
         this.owner = owner;
         this.ativo = true;
     }
+
+    /**
+     * Construtor vazio para o Object Pool. Atributos serão injetados via reutilizar().
+     */
+    public Projetil() {
+        this.ativo = false;
+    }
+
+    /**
+     * Reutiliza a instância existente de Projetil via Object Pool.
+     */
+    public void reutilizar(float x, float y, float direcaoX, float direcaoY,
+                           float velocidade, List<Alvo> alvos, Object collisionLock,
+                           int larguraTela, int alturaTela, com.autotarget.engine.Jogo jogo,
+                           com.autotarget.model.Lado lado, Alvo alvoReservado, com.autotarget.model.Canhao owner) {
+        this.x = x;
+        this.y = y;
+        this.direcaoX = direcaoX;
+        this.direcaoY = direcaoY;
+        this.velocidade = velocidade;
+        this.ativo = true;
+
+        this.alvos = alvos;
+        this.collisionLock = collisionLock;
+        this.larguraTela = larguraTela;
+        this.alturaTela = alturaTela;
+        this.jogo = jogo;
+        this.lado = lado;
+        this.alvoReservado = alvoReservado;
+        this.owner = owner;
+    }
+
 
     public void start() {} // Dummy start for compatibility
 
