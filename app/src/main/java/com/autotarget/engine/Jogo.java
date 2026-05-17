@@ -681,6 +681,12 @@ public class Jogo {
                 Alvo alvo = listaAlvos.get(i);
                 if (!alvo.isAtivo()) continue;
 
+                // Bloqueio apenas na janela inicial da partida: durante os primeiros 10s
+                // os canhões aguardam dados mínimos de reconciliação antes de gastar tiros.
+                if (estado == Estado.RODANDO && tempoRestante > (DURACAO_PARTIDA_SEGUNDOS - 10)) {
+                    continue;
+                }
+
                 // Verificar se já está reservado por OUTRO canhão
                 Canhao dono = reservasAlvos.get(alvo);
                 if (dono != null && dono != canhao && dono.isAtivo()) {
@@ -1000,20 +1006,18 @@ public class Jogo {
 
     /**
      * Calcula energia regenerada ao abater um alvo.
-     * Quanto mais rápido o abate, mais energia é devolvida.
-     * Isso incentiva a IA a se arriscar adicionando mais canhões:
-     * mais canhões → abates mais rápidos → mais energia regenerada →
-     * compensa o custo extra dos canhões.
+     * Reduzido para criar um modelo de "sobrevida" em vez de lucro infinito,
+     * atendendo ao requisito de recurso restritivo da AV2.
      *
      * @param alvo o alvo destruído
      * @return energia a regenerar
      */
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
-        if (idadeMs < 2000) return 15f; // Abate ultra-rápido: compensa ~15s de 1 canhão
-        if (idadeMs < 4000) return 10f; // Abate médio: compensa ~10s de 1 canhão
-        if (idadeMs < 7000) return 5f;  // Abate lento: compensa ~5s de 1 canhão
-        return 2f;                      // Muito lento: recuperação mínima de segurança
+        if (idadeMs < 2000) return 1.0f; // Abate ultra-rápido: sobrevida curta
+        if (idadeMs < 4000) return 0.5f; // Abate médio
+        if (idadeMs < 7000) return 0.2f; // Abate lento
+        return 0.1f;                      // Muito lento: recuperação insignificante
     }
 
     // ── Helpers ──────────────────────────────────────────────────
@@ -1193,6 +1197,8 @@ public class Jogo {
     public List<Canhao> getCanhoesDireito() { return canhoesDireito; }
     public List<Alvo> getAlvosEsquerdo() { return alvosEsquerdo; }
     public List<Alvo> getAlvosDireito() { return alvosDireito; }
+
+    public com.autotarget.service.SensorThread getSensorThread() { return sensorThread; }
 
     public List<Alvo> getAllAlvos() {
         List<Alvo> list = new ArrayList<>();

@@ -162,6 +162,10 @@ public class ReconciliacaoThread extends Thread {
         OnReconciliacaoListener l = getListener();
         if (l == null || larguraTela <= 0 || alturaTela <= 0) return;
 
+        if (sensorThread != null && sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
+            return;
+        }
+
         int nCanhoes = jogo.contarCanhoesAtivos(lado);
         int nAlvos = lado == Lado.ESQUERDO ? jogo.getAlvosEsquerdo().size() : jogo.getAlvosDireito().size();
         float energia = jogo.getEnergia(lado);
@@ -203,6 +207,10 @@ public class ReconciliacaoThread extends Thread {
 
     private void avaliarCustoBeneficio(Lado lado, List<Canhao> canhoes, DataReconciliation.ReconciliationResult[] resultados) {
         if (canhoes == null || canhoes.isEmpty() || resultados == null || resultados.length == 0) {
+            return;
+        }
+
+        if (sensorThread != null && sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
             return;
         }
 

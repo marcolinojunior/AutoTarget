@@ -21,7 +21,6 @@ import com.autotarget.R;
 import com.autotarget.util.ReconciliationLog;
 import com.github.mikephil.charting.charts.BarChart;
 import com.github.mikephil.charting.charts.LineChart;
-import com.github.mikephil.charting.components.LimitLine;
 import com.github.mikephil.charting.components.XAxis;
 import com.github.mikephil.charting.data.BarData;
 import com.github.mikephil.charting.data.BarDataSet;
@@ -62,7 +61,6 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         BarChart barChartRecon = findViewById(R.id.barChartRecon);
         LineChart lineChartUtility = findViewById(R.id.lineChartUtility);
         LineChart lineChartConditioning = findViewById(R.id.lineChartConditioning);
-        LineChart lineChartStarvation = findViewById(R.id.lineChartStarvation);
 
         String finalReport = report;
         btnCopyLogs.setOnClickListener(v -> {
@@ -127,7 +125,6 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         setupReconChart(barChartRecon);
         setupUtilityChart(lineChartUtility);
         setupConditioningChart(lineChartConditioning);
-        setupStarvationChart(lineChartStarvation);
     }
 
     private void setupEnergyChart(LineChart chart) {
@@ -223,98 +220,45 @@ public class ReconciliationReportActivity extends AppCompatActivity {
     }
 
     private void setupConditioningChart(LineChart chart) {
-        List<ReconciliationLog.ConditioningSample> samples = ReconciliationLog.getInstance().getConditioningSamples();
+        List<ReconciliationLog.SensorCountSample> samples = ReconciliationLog.getInstance().getSensorCountSamples();
         if (samples.isEmpty()) {
-            chart.setNoDataText("Nenhum dado de condicionamento registrado.");
-            chart.setNoDataTextColor(Color.WHITE);
-            return;
-        }
-
-        List<Entry> entriesCond = new ArrayList<>();
-        List<Entry> entriesFallback = new ArrayList<>();
-
-        for (int i = 0; i < samples.size(); i++) {
-            ReconciliationLog.ConditioningSample s = samples.get(i);
-            double cond = Math.max(s.conditionNumber, 1.0);
-            entriesCond.add(new Entry(i, (float) Math.log10(cond)));
-            entriesFallback.add(new Entry(i, s.usouFallback ? 1f : 0f));
-        }
-
-        LineDataSet setCond = new LineDataSet(entriesCond, "log10(cond)");
-        setCond.setColor(Color.parseColor("#E94560"));
-        setCond.setCircleColor(Color.parseColor("#E94560"));
-        setCond.setLineWidth(2f);
-        setCond.setValueTextColor(Color.WHITE);
-
-        LineDataSet setFallback = new LineDataSet(entriesFallback, "Fallback");
-        setFallback.setColor(Color.parseColor("#FFD166"));
-        setFallback.setCircleColor(Color.parseColor("#FFD166"));
-        setFallback.setLineWidth(1.5f);
-        setFallback.setValueTextColor(Color.WHITE);
-
-        chart.setData(new LineData(setCond, setFallback));
-        chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
-        chart.getXAxis().setTextColor(Color.WHITE);
-        chart.getAxisLeft().setTextColor(Color.WHITE);
-        chart.getAxisRight().setEnabled(false);
-        chart.getLegend().setTextColor(Color.WHITE);
-        chart.getDescription().setEnabled(false);
-        chart.invalidate();
-    }
-
-    private void setupStarvationChart(LineChart chart) {
-        List<ReconciliationLog.StarvationSample> samples = ReconciliationLog.getInstance().getStarvationSamples();
-        if (samples.isEmpty()) {
-            chart.setNoDataText("Nenhum dado de starvation registrado.");
+            chart.setNoDataText("Nenhum dado de quantidade de alvos registrado.");
             chart.setNoDataTextColor(Color.WHITE);
             return;
         }
 
         List<Entry> entriesEsq = new ArrayList<>();
         List<Entry> entriesDir = new ArrayList<>();
-        List<Entry> entriesLimite = new ArrayList<>();
+        int idxEsq = 0;
+        int idxDir = 0;
 
-        for (int i = 0; i < samples.size(); i++) {
-            ReconciliationLog.StarvationSample sample = samples.get(i);
-            entriesEsq.add(new Entry(i, sample.historicoEsq));
-            entriesDir.add(new Entry(i, sample.historicoDir));
-            entriesLimite.add(new Entry(i, 10f));
+        for (ReconciliationLog.SensorCountSample s : samples) {
+            if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
+                entriesEsq.add(new Entry(idxEsq++, s.alvos));
+            } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
+                entriesDir.add(new Entry(idxDir++, s.alvos));
+            }
         }
 
-        LineDataSet setEsq = new LineDataSet(entriesEsq, "Histórico Esq");
+        LineDataSet setEsq = new LineDataSet(entriesEsq, "Alvos Esq");
         setEsq.setColor(Color.parseColor("#00B4D8"));
         setEsq.setCircleColor(Color.parseColor("#00B4D8"));
         setEsq.setLineWidth(2f);
         setEsq.setValueTextColor(Color.WHITE);
 
-        LineDataSet setDir = new LineDataSet(entriesDir, "Histórico Dir");
+        LineDataSet setDir = new LineDataSet(entriesDir, "Alvos Dir");
         setDir.setColor(Color.parseColor("#E94560"));
         setDir.setCircleColor(Color.parseColor("#E94560"));
         setDir.setLineWidth(2f);
         setDir.setValueTextColor(Color.WHITE);
 
-        LineDataSet setLimite = new LineDataSet(entriesLimite, "Limiar 10");
-        setLimite.setColor(Color.parseColor("#FF5252"));
-        setLimite.setCircleColor(Color.parseColor("#FF5252"));
-        setLimite.setDrawCircles(false);
-        setLimite.enableDashedLine(12f, 8f, 0f);
-        setLimite.setLineWidth(1.5f);
-        setLimite.setValueTextColor(Color.WHITE);
-
-        chart.setData(new LineData(setEsq, setDir, setLimite));
+        chart.setData(new LineData(setEsq, setDir));
         chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
         chart.getXAxis().setTextColor(Color.WHITE);
         chart.getAxisLeft().setTextColor(Color.WHITE);
         chart.getAxisRight().setEnabled(false);
         chart.getLegend().setTextColor(Color.WHITE);
         chart.getDescription().setEnabled(false);
-
-        LimitLine limitLine = new LimitLine(10f, "Y=10");
-        limitLine.setLineColor(Color.parseColor("#FF5252"));
-        limitLine.setTextColor(Color.parseColor("#FF5252"));
-        limitLine.setTextSize(10f);
-        chart.getAxisLeft().removeAllLimitLines();
-        chart.getAxisLeft().addLimitLine(limitLine);
         chart.invalidate();
     }
 

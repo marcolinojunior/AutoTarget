@@ -4,8 +4,13 @@ import com.autotarget.model.Lado;
 import com.autotarget.service.SensorThread;
 
 /**
+ * @deprecated Temporariamente desligado na AV2. A malha de controle proporcional
+ * será migrada para o ThermalSensorService na AV3 para simular o Sistema
+ * Ciberfísico de Controlo de Temperatura e Taxa de Disparo.
+ *
  * Controlador de feedback para evitar inanição de dados.
  */
+@Deprecated
 public class DataStarvationController {
 
     private static final int HISTORICO_MINIMO_SEGURO = 10;

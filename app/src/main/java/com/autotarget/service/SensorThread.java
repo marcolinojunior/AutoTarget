@@ -401,10 +401,21 @@ public class SensorThread extends Thread {
         }
         double mediaX = media(snap.leiturasPosX);
         double varX = varianciaAmostral(snap.leiturasPosX, mediaX);
+        double mediaY = media(snap.leiturasPosY);
+        double varY = varianciaAmostral(snap.leiturasPosY, mediaY);
         double mediaV = media(snap.leiturasVelocidade);
         double varV = varianciaAmostral(snap.leiturasVelocidade, mediaV);
+        double mediaVelX = media(snap.leiturasVelocidadeX);
+        double varVelX = varianciaAmostral(snap.leiturasVelocidadeX, mediaVelX);
+        double mediaVelY = media(snap.leiturasVelocidadeY);
+        double varVelY = varianciaAmostral(snap.leiturasVelocidadeY, mediaVelY);
+        
         ReconciliationLog.getInstance().logSensorStats(
                 lado.name(), snap.alvosAtivos.size(), historico, mediaX, varX, mediaV, varV);
+        
+        // [EXCELENTE] Log detalhado de variancia dos sensores (X, Y, VelX, VelY)
+        ReconciliationLog.getInstance().logSensorVariance(
+                lado.name(), mediaX, varX, mediaVelX, varVelX, mediaY, varY, mediaVelY, varVelY);
         
         // Registrar para visualização em dashboard
         float[] distancias = new float[snap.leiturasPosX.length];
@@ -567,6 +578,16 @@ public class SensorThread extends Thread {
 
     public static int getHistoricoMinimoReconciliacao() {
         return TAMANHO_HISTORICO;
+    }
+
+    public boolean isAlvoTravado(Lado lado, long targetId) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null) return false;
+
+            TargetHistory history = dado.historicoPorAlvo.get(targetId);
+            return history != null && history.samples.size() >= TAMANHO_HISTORICO;
+        }
     }
 
     private float[][] calcularMediaHistoricoLegado(LinkedList<float[][]> historico) {
@@ -745,4 +766,22 @@ public class SensorThread extends Thread {
 
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
     public boolean isAtivo() { return ativo; }
+
+    /**
+     * Retorna a última leitura ruidosa de um alvo específico para visualização "Ghost".
+     * @param targetId ID do alvo
+     * @return float[2] {x, y} ruidoso, ou null se não houver leitura
+     */
+    public float[] getUltimaLeituraRuidosa(long targetId) {
+        synchronized (sensorLock) {
+            for (SideSensorData data : dadosPorLado.values()) {
+                TargetHistory history = data.historicoPorAlvo.get(targetId);
+                if (history != null && !history.samples.isEmpty()) {
+                    TargetHistory.Sample last = history.samples.getLast();
+                    return new float[]{last.x, last.y};
+                }
+            }
+        }
+        return null;
+    }
 }

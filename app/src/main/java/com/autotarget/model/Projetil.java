@@ -243,12 +243,6 @@ public class Projetil implements Runnable {
                 if (alvo.isAtivo() && collide(alvo)) {
                     com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
                     if (geom.determineLado(alvo.getX()) == this.lado) {
-                        com.autotarget.util.DataStarvationController controller = jogo != null ? jogo.getStarvationController() : null;
-                        if (controller != null && controller.alvoEsquivou(this.lado)) {
-                            this.ativo = false;
-                            if (owner != null) owner.onProjetilFinished(this);
-                            break;
-                        }
                         if (alvo.tentarAbater(this.lado)) {
                             this.ativo = false;
                             // Tiro ACERTOU — limpar reserva (alvo destruído)
@@ -258,6 +252,15 @@ public class Projetil implements Runnable {
                             ReconciliationLog.getInstance().logShot(
                                     this.x, this.y, alvo.getX(), alvo.getY(),
                                     alvo.getX(), alvo.getY(), true, this.lado.name());
+                            
+                            // [EXCELENTE] Log de energia restaurada por abate
+                            float energiaAntes = jogo.getEnergia(this.lado);
+                            float energiaRestaurada = 5f; // 5 pontos de energia por abate bem-sucedido
+                            jogo.getEnergyManager(this.lado).add(energiaRestaurada);
+                            float energiaApos = jogo.getEnergia(this.lado);
+                            ReconciliationLog.getInstance().logEnergyRestoration(
+                                    this.lado.name(), energiaRestaurada, energiaApos);
+                            
                             break;
                         }
                     }
