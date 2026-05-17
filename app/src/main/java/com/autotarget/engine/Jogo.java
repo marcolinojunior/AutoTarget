@@ -505,15 +505,19 @@ public class Jogo {
 
     // Exposição dos dados via broadcast para ferramentas de profiling:
     private void registrarMetricasEnergiaPenalidade() {
+        // FIX 4: Snapshot atômico dos valores de energia para evitar desync no relatório consolidado
+        float energiaEsq = energyManagerEsquerdo.get();
+        float energiaDir = energyManagerDireito.get();
+        
         int canhoesEsq = contarCanhoesAtivos(Lado.ESQUERDO);
         int canhoesDir = contarCanhoesAtivos(Lado.DIREITO);
         double intervaloEsq = calcularIntervaloMedio(canhoesEsquerdo);
         double intervaloDir = calcularIntervaloMedio(canhoesDireito);
 
-        Log.i("Autotarget-Plotter", "EnergiaEsq:" + energyManagerEsquerdo.get() + ",EnergiaDir:" + energyManagerDireito.get() + ",Intervalo:" + intervaloEsq);
+        Log.i("Autotarget-Plotter", "EnergiaEsq:" + energiaEsq + ",EnergiaDir:" + energiaDir + ",Intervalo:" + intervaloEsq);
 
         ReconciliationLog.getInstance().logEnergyPenalty(
-                energyManagerEsquerdo.get(), energyManagerDireito.get(), canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
+                energiaEsq, energiaDir, canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
     }
 
     private double calcularIntervaloMedio(List<Canhao> canhoes) {
@@ -920,17 +924,30 @@ public class Jogo {
         return destruidos;
     }
 
-    private int processarAlvosInativos(List<Alvo> lista, Lado lado) {
+    private int processarAlvosInativos(List<Alvo> lista, Lado ladoSendoProcessado) {
         if (lista.isEmpty()) return 0;
         List<Alvo> removidos = new ArrayList<>();
-        int pontos = 0;
-        float energiaRegenerada = 0f;
+        int abatesConfirmadosLado = 0;
 
         for (int i = 0; i < lista.size(); i++) {
             Alvo alvo = lista.get(i);
             if (!alvo.isAtivo()) {
-                pontos += calcularPontosAbate(alvo);
-                energiaRegenerada += calcularEnergiaRegenerada(alvo);
+                // REGRA DE DETERMINISMO (AV2): Somente contabiliza o ponto se o
+                // ladoAbate registrado no alvo for o mesmo que estamos processando.
+                // Isso evita dupla contagem ou atribuição ao lado errado durante cruzamento.
+                if (alvo.getLadoAbate() == ladoSendoProcessado) {
+                    int pontos = calcularPontosAbate(alvo);
+                    float energiaRegenerada = calcularEnergiaRegenerada(alvo);
+                    
+                    if (ladoSendoProcessado == Lado.ESQUERDO) {
+                        pontuacaoEsquerdo.addAndGet(pontos);
+                        energyManagerEsquerdo.add(energiaRegenerada);
+                    } else {
+                        pontuacaoDireito.addAndGet(pontos);
+                        energyManagerDireito.add(energiaRegenerada);
+                    }
+                    abatesConfirmadosLado++;
+                }
                 removidos.add(alvo);
                 liberarAlvo(alvo);
             }
@@ -938,17 +955,8 @@ public class Jogo {
 
         if (!removidos.isEmpty()) {
             lista.removeAll(removidos);
-            if (lado == Lado.ESQUERDO) {
-                pontuacaoEsquerdo.addAndGet(pontos);
-                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
-                energyManagerEsquerdo.add(energiaRegenerada);
-            } else {
-                pontuacaoDireito.addAndGet(pontos);
-                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
-                energyManagerDireito.add(energiaRegenerada);
-            }
         }
-        return removidos.size();
+        return abatesConfirmadosLado;
     }
 
     // ── Pontuação com Penalidade Temporal ─────────────────────────

@@ -1,431 +1,172 @@
-/*
- * ============================================================================
- * Arquivo: Canhao.java
- * Pacote:  com.autotarget.model
- * ============================================================================
- *
- * DESCRIÇÃO TÉCNICA:
- *   Classe que representa um canhão autônomo no jogo AutoTarget. Cada canhão
- *   opera em sua própria thread, pertence a um Lado (ESQUERDO ou DIREITO),
- *   e dispara projéteis automaticamente em direção ao alvo ativo mais próximo
- *   que esteja no MESMO lado.
- *
- * ESCALONAMENTO RMA (Rate Monotonic Analysis):
- *   Tarefa: T6 — Canhao.run (Disparos)
- *   Período P₆ = 1500ms (base), Execução C₆ = 3-5ms, Deadline D₆ = 1500ms
- *   Prioridade RM: 5 (Baixa)
- *   Fórmula Liu & Layland: Σ(Ci/Pi) ≤ n(2^(1/n) - 1)
- *
- * PENALIDADE EXPONENCIAL (AV2 §6.2.2-b):
- *   I_novo = I_base × (1 + max(0, N - L) × α)
- *   Onde: L=5 (limiar), α=0.2 (coeficiente de penalidade)
- *
- * REALOCAÇÃO (AV2 §6.2.2-d):
- *   Canhões podem mover-se gradualmente para posição ótima calculada
- *   pela ReconciliacaoThread via moverPara().
- *
- * RETROALIMENTAÇÃO TÉRMICA (AV3 §6.3.2-d):
- *   thermalPenaltyFactor multiplica o intervalo de sleep quando
- *   temperatura > 40°C.
- *
- * ============================================================================
- */
 package com.autotarget.model;
 
 import android.util.Log;
+import com.autotarget.engine.Jogo;
 import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ReconciliationLog;
-
+import com.autotarget.util.DataReconciliation;
+import com.autotarget.service.ReconciliacaoThread;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Canhão autônomo que opera em sua própria thread.
- */
 public class Canhao extends Thread {
-
     private static final String TAG = "Canhao";
-
-    // ── Atributos ────────────────────────────────────────────────
-    private volatile float x;
-    private volatile float y;
-    private volatile float targetX;
-    private volatile float targetY;
-    private volatile boolean movendo;
+    private float x, y, targetX, targetY;
+    private boolean movendo;
     private float angulo;
     private volatile boolean ativo;
-
-    /** Lado (campo) ao qual este canhão pertence. */
     private final Lado lado;
-
-    /** Lista thread-safe dos projéteis disparados por este canhão. */
     private final List<Projetil> projeteis;
-
-    /** Referência à lista compartilhada de alvos (para mirar). */
     private final List<Alvo> alvos;
-
-    /** Lock global para colisão. */
     private final Object collisionLock;
+    private final Jogo jogo;
 
-    /** Referência ao motor do jogo (para acessar QuadTree). */
-    private final com.autotarget.engine.Jogo jogo;
-
-    /** Velocidade dos projéteis disparados. */
     private static final float VELOCIDADE_PROJETIL = 12f;
-
-    /** Intervalo base entre disparos (ms). */
     private static final int INTERVALO_DISPARO_BASE = 1500;
-
-    /** Limiar de penalidade (L = 5). */
     private static final int LIMIAR_PENALIDADE = 5;
-
-    /** Coeficiente de penalidade (α = 0.2). */
     private static final float ALPHA_PENALIDADE = 0.2f;
-
-    /** Velocidade de movimento de realocação (pixels por frame). */
     private static final float VELOCIDADE_MOVIMENTO = 2.0f;
 
-    /** Custo de disparo de energia por cada disparo. */
-    private static final float CUSTO_DISPARO = 1.0f;
+    private int intervaloDisparo = INTERVALO_DISPARO_BASE;
+    private float thermalPenaltyFactor = 1.0f;
+    private int larguraTela, alturaTela;
+    private final ExecutorService projeteisPool = Executors.newFixedThreadPool(5);
 
-    /** Intervalo de disparo efetivo (pode ter penalidade). */
-    private volatile int intervaloDisparo;
-
-    /** Fator de penalidade térmica (AV3 — controle por feedback). */
-    private volatile float thermalPenaltyFactor = 1.0f;
-
-    /** Limites da tela. */
-    private int larguraTela;
-    private int alturaTela;
-
-    private static final ExecutorService projeteisPool = Executors.newFixedThreadPool(20);
-
-    // ── Construtor ───────────────────────────────────────────────
-
-    public Canhao(float x, float y, Lado lado, List<Alvo> alvos,
-                  Object collisionLock, int larguraTela, int alturaTela,
-                  com.autotarget.engine.Jogo jogo) {
-        this.x = x;
-        this.y = y;
-        this.targetX = x;
-        this.targetY = y;
-        this.movendo = false;
-        this.lado = lado;
-        this.angulo = 0f;
-        this.ativo = true;
-        this.alvos = alvos;
-        this.collisionLock = collisionLock;
-        this.larguraTela = larguraTela;
-        this.alturaTela = alturaTela;
-        this.jogo = jogo;
-        this.projeteis = new CopyOnWriteArrayList<>();
-        this.intervaloDisparo = INTERVALO_DISPARO_BASE;
+    public Canhao(float x, float y, Lado lado, List<Alvo> alvos, Object collisionLock, int largura, int altura, Jogo jogo) {
+        this.x = x; this.y = y; this.lado = lado; this.alvos = alvos;
+        this.collisionLock = collisionLock; this.larguraTela = largura; this.alturaTela = altura;
+        this.jogo = jogo; this.ativo = true;
+        this.projeteis = new java.util.concurrent.CopyOnWriteArrayList<>();
     }
-
-    // ── Thread ───────────────────────────────────────────────────
 
     @Override
     public void run() {
-        Log.i(TAG, "Thread do canhão " + lado + " iniciada: " + getName());
         while (ativo) {
             long startNs = System.nanoTime();
             try {
-                // ── Fase 1: Recalcular penalidade dinâmica antes de cada disparo ──
-                // Consulta o Jogo para saber quantos canhões ativos existem
-                // no mesmo lado e recalcula I_novo = I_base × (1 + max(0, N-L) × α)
-                int nAtivos = jogo.contarCanhoesAtivos(this.lado);
-                aplicarPenalidade(nAtivos);
-
-                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia (Uso exclusivo do EnergyManager)
-                // ── Fase 1: Verificar energia do lado ──
-                // Tenta remover o custo do disparo atomicamente. Se houver energia, dispara.
-                // Caso contrário, entra em stand-by preemptivo, sem deduzir a energia.
-                boolean hasEnergy = jogo.getEnergyManager(this.lado).tryRemove(CUSTO_DISPARO);
-                if (hasEnergy) {
-                    disparar();
-                }
-
-                if (!ativo) {
-                    Log.i(TAG, "Canhão " + lado + " desativado durante ciclo.");
-                    break;
-                }
-
+                disparar();
                 limparProjetisInativos();
-
-                // Intervalo com penalidade térmica aplicada
                 long sleepMs = (long) (intervaloDisparo * thermalPenaltyFactor);
-                Thread.sleep(sleepMs);
-
-                // ── Instrumentação RMA ──
-                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
-                RMAAnalysis.checkDeadline("T6-Canhao", elapsedMs, intervaloDisparo);
-
+                Thread.sleep(Math.max(sleepMs, 100));
+                RMAAnalysis.checkDeadline("T6-Canhao", (System.nanoTime() - startNs) / 1_000_000, intervaloDisparo);
             } catch (InterruptedException e) {
-                Log.w(TAG, "Thread do canhão " + lado + " interrompida.");
-                Thread.currentThread().interrupt();
                 ativo = false;
-                break;
             } catch (Exception e) {
-                Log.e(TAG, "ERRO INESPERADO no loop do canhão " + lado, e);
+                Log.e(TAG, "Erro no loop do canhão", e);
             }
         }
-        Log.i(TAG, "Thread do canhão " + lado + " finalizada.");
     }
 
-    // ── Disparo ──────────────────────────────────────────────────
-
     public void disparar() {
-        // Solicitar alvo via sistema de reserva coordenada
-        // Apenas alvos NÃO reservados por outro canhão são considerados
         Alvo alvoReservado = jogo.reservarAlvo(this);
-        if (alvoReservado == null) {
-            return; // Nenhum alvo livre disponível
-        }
-        // Verificar se alvo ainda ativo logo após reserva
-        if (!alvoReservado.isAtivo()) {
-            jogo.liberarAlvo(alvoReservado);
+        if (alvoReservado == null || !alvoReservado.isAtivo()) {
+            if (alvoReservado != null) jogo.liberarAlvo(alvoReservado);
             return;
         }
 
-        // Snapshot instantâneo (Defesa contra TOCTOU - Audit 2.3)
         float tX = alvoReservado.getX();
         float tY = alvoReservado.getY();
+        
+        DataReconciliation.ReconciliationResult recon = 
+                ReconciliacaoThread.getPosicaoReconciliada(alvoReservado.getTargetId());
+        if (recon != null) {
+            tX = recon.x; tY = recon.y;
+        }
+
         float tVel = alvoReservado.getVelocidade();
         float tDirX = alvoReservado.getDirecaoX();
         float tDirY = alvoReservado.getDirecaoY();
 
-        // Verificação dupla: se alvo foi destruído enquanto líamos, aborta
-        if (!alvoReservado.isAtivo()) {
-            jogo.liberarAlvo(alvoReservado);
-            return;
-        }
-
         boolean disparoEfetivado = false;
         try {
-
-            // Velocidade do alvo em pixels/ms (alvo atualiza a cada 30ms)
             float vTargetX = (tDirX * tVel) / 30f;
             float vTargetY = (tDirY * tVel) / 30f;
-
-            // Velocidade do projétil em pixels/ms (projétil atualiza a cada 16ms)
             float vProj = VELOCIDADE_PROJETIL / 16f;
 
             float dx = tX - this.x;
             float dy = tY - this.y;
 
-            // Cálculo da interceptação (previsão da trajetória)
-            // (dx + vTargetX * t)^2 + (dy + vTargetY * t)^2 = (vProj * t)^2
-            // A*t^2 + B*t + C = 0
             float a = vTargetX * vTargetX + vTargetY * vTargetY - vProj * vProj;
             float b = 2 * (dx * vTargetX + dy * vTargetY);
             float c = dx * dx + dy * dy;
 
-            float tempoInterceptacao = 0;
+            float t = 0;
             if (Math.abs(a) > 0.0001f) {
                 float delta = b * b - 4 * a * c;
                 if (delta >= 0) {
                     float t1 = (-b + (float) Math.sqrt(delta)) / (2 * a);
                     float t2 = (-b - (float) Math.sqrt(delta)) / (2 * a);
-                    if (t1 > 0 && t2 > 0) tempoInterceptacao = Math.min(t1, t2);
-                    else if (t1 > 0) tempoInterceptacao = t1;
-                    else if (t2 > 0) tempoInterceptacao = t2;
+                    t = (t1 > 0 && t2 > 0) ? Math.min(t1, t2) : Math.max(t1, t2);
                 }
             }
 
-            // Posição futura prevista para interceptação
-            float targetAimX = tX;
-            float targetAimY = tY;
+            float aimX = tX + (t > 0 ? vTargetX * t : 0);
+            float aimY = tY + (t > 0 ? vTargetY * t : 0);
 
-            if (tempoInterceptacao > 0) {
-                targetAimX = tX + vTargetX * tempoInterceptacao;
-                targetAimY = tY + vTargetY * tempoInterceptacao;
-            }
+            float dxAim = aimX - this.x;
+            float dyAim = aimY - this.y;
+            float dist = (float) Math.sqrt(dxAim * dxAim + dyAim * dyAim);
+            if (dist < 0.1f) return;
 
-            float dxAim = targetAimX - this.x;
-            float dyAim = targetAimY - this.y;
-            float distAim = (float) Math.sqrt(dxAim * dxAim + dyAim * dyAim);
-            if (distAim < 0.001f) {
-                return;
-            }
-
-            float dirX = dxAim / distAim;
-            float dirY = dyAim / distAim;
-
-            try {
-                this.angulo = (float) Math.toDegrees(Math.atan2(dyAim, dxAim));
-            } catch (Exception e) {
-                this.angulo = 0f;
-            }
-
-                Projetil projetil = com.autotarget.util.ProjetilPool.obter();
-                if (projetil == null) {
-                    projetil = new Projetil();
-                }
-                projetil.reutilizar(
-                    this.x, this.y, dirX, dirY,
-                    VELOCIDADE_PROJETIL, alvos, collisionLock,
-                    larguraTela, alturaTela, jogo, this.lado,
-                    alvoReservado, this
-                );
-            synchronized (projeteis) {
-                projeteis.add(projetil);
-            }
-            projeteisPool.execute(projetil);
+            this.angulo = (float) Math.toDegrees(Math.atan2(dyAim, dxAim));
+            Projetil p = com.autotarget.util.ProjetilPool.obter();
+            if (p == null) p = new Projetil();
+            p.reutilizar(this.x, this.y, dxAim/dist, dyAim/dist, VELOCIDADE_PROJETIL, alvos, collisionLock, larguraTela, alturaTela, jogo, lado, alvoReservado, this);
+            
+            projeteis.add(p);
+            projeteisPool.execute(p);
             disparoEfetivado = true;
 
-            // Log do disparo para auditoria de reconciliação
-            ReconciliationLog.getInstance().logShot(
-                    this.x, this.y, tX, tY, targetAimX, targetAimY,
-                    false, this.lado.name()); // hit é atualizado pelo Projetil
+            // FIX 1: Logar o 'aimX' e 'aimY' calculados corretamente, mesmo em caso de acerto futuro
+            ReconciliationLog.getInstance().logShot(this.x, this.y, tX, tY, aimX, aimY, false, lado.name());
         } finally {
-            if (!disparoEfetivado) {
-                jogo.liberarAlvo(alvoReservado);
-            }
+            if (!disparoEfetivado) jogo.liberarAlvo(alvoReservado);
         }
     }
 
     private void limparProjetisInativos() {
-        // CopyOnWriteArrayList iterators do not support remove().
-        // Use removeIf for thread-safe removal of inactive projectiles.
         projeteis.removeIf(p -> {
-            if (!p.isAtivo()) {
-                com.autotarget.util.ProjetilPool.liberar(p);
-                return true;
-            }
+            if (!p.isAtivo()) { com.autotarget.util.ProjetilPool.liberar(p); return true; }
             return false;
         });
     }
 
-    /**
-     * Callback chamada por um Projetil quando ele finaliza (hit ou fora da tela)
-     * para que seja removido imediatamente da lista de projéteis.
-     */
     public void onProjetilFinished(Projetil p) {
-        if (p == null) return;
-        boolean removed = false;
-        synchronized (projeteis) {
-            removed = projeteis.remove(p);
-        }
-        if (removed) {
-            com.autotarget.util.ProjetilPool.liberar(p);
-        }
+        if (p != null && projeteis.remove(p)) com.autotarget.util.ProjetilPool.liberar(p);
     }
 
-    // ── Penalidade Exponencial (AV2) ────────────────────────────
-
-    /**
-     * Aplica penalidade exponencial na taxa de disparo.
-     * I_novo = I_base × (1 + max(0, N - L) × α)
-     *
-     * @param totalCanhoesNoLado número total de canhões no mesmo lado (N)
-     */
-    public void aplicarPenalidade(int totalCanhoesNoLado) {
-        float fator = 1.0f + Math.max(0, totalCanhoesNoLado - LIMIAR_PENALIDADE)
-                * ALPHA_PENALIDADE;
-        this.intervaloDisparo = (int) (INTERVALO_DISPARO_BASE * fator);
+    public void aplicarPenalidade(int total) {
+        this.intervaloDisparo = (int) (INTERVALO_DISPARO_BASE * (1.0f + Math.max(0, total - LIMIAR_PENALIDADE) * ALPHA_PENALIDADE));
     }
 
-    /**
-     * Sobrecarga de compatibilidade com API anterior.
-     */
-    public void aplicarPenalidade(boolean penalidade) {
-        if (penalidade) {
-            this.intervaloDisparo = INTERVALO_DISPARO_BASE * 2;
-        } else {
-            this.intervaloDisparo = INTERVALO_DISPARO_BASE;
-        }
+    public void moverPara(float nx, float ny) {
+        this.targetX = nx; this.targetY = ny; this.movendo = true;
     }
 
-    // ── Realocação Gradual (AV2 §6.2.2-d) ──────────────────────
-
-    /**
-     * Define um novo destino para o canhão. A movimentação ocorre
-     * gradualmente, a cada ciclo do run().
-     *
-     * @param novoX posição X de destino
-     * @param novoY posição Y de destino
-     */
-    public void moverPara(float novoX, float novoY) {
-        this.targetX = novoX;
-        this.targetY = novoY;
-        this.movendo = true;
-        Log.i(TAG, String.format("Canhão %s movendo para (%.0f, %.0f)",
-                lado.name(), novoX, novoY));
-    }
-
-    /**
-     * Atualiza posição gradualmente em direção ao destino.
-     * Agora chamado pelo motor de física (PhysicsTimer) a 60Hz.
-     */
     public void atualizarMovimento() {
         if (!movendo) return;
-
-        float dx = targetX - x;
-        float dy = targetY - y;
-        float dist = (float) Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < VELOCIDADE_MOVIMENTO) {
-            x = targetX;
-            y = targetY;
-            movendo = false;
-        } else {
-            x += (dx / dist) * VELOCIDADE_MOVIMENTO;
-            y += (dy / dist) * VELOCIDADE_MOVIMENTO;
-        }
+        float dx = targetX - x, dy = targetY - y;
+        float d = (float) Math.sqrt(dx*dx + dy*dy);
+        if (d < VELOCIDADE_MOVIMENTO) { x = targetX; y = targetY; movendo = false; }
+        else { x += (dx/d)*VELOCIDADE_MOVIMENTO; y += (dy/d)*VELOCIDADE_MOVIMENTO; }
     }
 
-    // ── Controle ─────────────────────────────────────────────────
-
-    public void pararCanhao() {
-        this.ativo = false;
-        synchronized (projeteis) {
-            for (Projetil p : projeteis) {
-                p.setAtivo(false);
-            }
-        }
-    }
-
-    // ── Getters / Setters ────────────────────────────────────────
+    public void pararCanhao() { this.ativo = false; for (Projetil p : projeteis) p.setAtivo(false); }
 
     public float getX() { return x; }
     public float getY() { return y; }
     public float getAngulo() { return angulo; }
     public boolean isAtivo() { return ativo; }
+    public void setAtivo(boolean a) { this.ativo = a; }
     public Lado getLado() { return lado; }
     public List<Projetil> getProjeteis() { return projeteis; }
     public int getIntervaloDisparo() { return intervaloDisparo; }
     public boolean isMovendo() { return movendo; }
-
-    public void setAtivo(boolean ativo) { this.ativo = ativo; }
-    public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
-    public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }
-
-    /**
-     * Define posição instantânea do canhão (usado pelo Drag-and-Drop do jogador).
-     * Diferente de moverPara(), que define um destino para glide gradual,
-     * setPosicao() teleporta o canhão diretamente para a coordenada do dedo.
-     *
-     * @param novoX coordenada X do toque
-     * @param novoY coordenada Y do toque
-     */
-    public void setPosicao(float novoX, float novoY) {
-        // Validação de bounds para evitar canhão fora da tela
-        float clampedX = Math.max(0f, Math.min(novoX, larguraTela));
-        float clampedY = Math.max(0f, Math.min(novoY, alturaTela));
-        this.x = clampedX;
-        this.y = clampedY;
-        this.targetX = this.x;
-        this.targetY = this.y;
-        this.movendo = false;
-    }
-
-    /** Define fator de penalidade térmica (AV3). 1.0 = normal. */
-    public void setThermalPenaltyFactor(float factor) {
-        this.thermalPenaltyFactor = factor;
-    }
-
+    public void setPosicao(float nx, float ny) { this.x = nx; this.y = ny; }
+    public void setLarguraTela(int l) { this.larguraTela = l; }
+    public void setAlturaTela(int h) { this.alturaTela = h; }
+    public void setThermalPenaltyFactor(float f) { this.thermalPenaltyFactor = f; }
     public static int getIntervaloDisparoBase() { return INTERVALO_DISPARO_BASE; }
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
     public static float getAlphaPenalidade() { return ALPHA_PENALIDADE; }

@@ -63,13 +63,16 @@ import java.util.Random;
 public abstract class Alvo extends Thread {
 
     // ── Atributos ────────────────────────────────────────────────
+    private final long id;
+    private static final java.util.concurrent.atomic.AtomicLong idCounter = new java.util.concurrent.atomic.AtomicLong(0);
     protected float x;
     protected float y;
     protected float raio;
     protected float velocidade;
     protected float direcaoX;
     protected float direcaoY;
-    protected volatile boolean ativo;
+    private final java.util.concurrent.atomic.AtomicBoolean vivo = new java.util.concurrent.atomic.AtomicBoolean(true);
+    private volatile Lado ladoAbate = null;
 
     /** Limites da tela (definidos externamente pelo Jogo). */
     protected int larguraTela;
@@ -97,13 +100,13 @@ public abstract class Alvo extends Thread {
      */
     public Alvo(float x, float y, float raio, float velocidade,
                 int larguraTela, int alturaTela) {
+        this.id = idCounter.incrementAndGet();
         this.x = x;
         this.y = y;
         this.raio = raio;
         this.velocidade = velocidade;
         this.larguraTela = larguraTela;
         this.alturaTela = alturaTela;
-        this.ativo = true;
         this.timestampNascimento = System.currentTimeMillis();
 
         // Direção inicial aleatória normalizada
@@ -116,16 +119,33 @@ public abstract class Alvo extends Thread {
 
     @Override
     public void run() {
-        while (ativo) {
+        while (isAtivo()) {
             try {
                 mover();
                 verificarLimites();
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                ativo = false;
+                setAtivo(false);
             }
         }
+    }
+
+    /**
+     * Tenta abater o alvo atomicamente.
+     * @param lado o lado que está tentando o abate
+     * @return true se obteve sucesso no abate
+     */
+    public boolean tentarAbater(Lado lado) {
+        if (vivo.compareAndSet(true, false)) {
+            this.ladoAbate = lado;
+            return true;
+        }
+        return false;
+    }
+
+    public Lado getLadoAbate() {
+        return ladoAbate;
     }
 
     /**
@@ -182,15 +202,20 @@ public abstract class Alvo extends Thread {
 
     // ── Getters / Setters ────────────────────────────────────────
 
+    public long getTargetId() { return id; }
+    public void setPosicaoX(float x) { this.x = x; }
+
     public float getX() { return x; }
     public float getY() { return y; }
     public float getRaio() { return raio; }
     public float getVelocidade() { return velocidade; }
     public float getDirecaoX() { return direcaoX; }
     public float getDirecaoY() { return direcaoY; }
-    public boolean isAtivo() { return ativo; }
+    public boolean isAtivo() { return vivo.get(); }
 
-    public void setAtivo(boolean ativo) { this.ativo = ativo; }
+    public void setAtivo(boolean ativo) {
+        this.vivo.set(ativo);
+    }
 
     public void setLarguraTela(int larguraTela) { this.larguraTela = larguraTela; }
     public void setAlturaTela(int alturaTela) { this.alturaTela = alturaTela; }

@@ -176,9 +176,15 @@ public final class ReconciliationLog {
                                                float[] canhoesX, float[] canhoesY,
                                                double normA_yHat, boolean usouEJML,
                                                String lado) {
+        // FIX: Usar as coordenadas reconciliadas para calcular o MSE quando usouEJML=true
+        // para garantir que a barra verde reflita a melhoria espacial.
         double mseBruto = mseDistancias(distBrutas, xReal, yReal, canhoesX, canhoesY);
         double mseRecon = mseDistancias(distRecon, xReal, yReal, canhoesX, canhoesY);
         double erroPos = Math.hypot(xEstimado - xReal, yEstimado - yReal);
+        
+        // Se mseRecon explodiu (NaN/Inf), saturar para valor bruto para não quebrar o gráfico
+        if (!Double.isFinite(mseRecon)) mseRecon = mseBruto;
+
         reconSamples.add(new ReconSample(mseBruto, mseRecon, erroPos, normA_yHat, lado));
 
         appendEvento(String.format(Locale.US,

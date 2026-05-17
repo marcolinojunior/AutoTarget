@@ -242,17 +242,23 @@ public class Projetil implements Runnable {
             }
             
             for (Alvo alvo : candidatos) {
+                // REGRA DE PRECEDÊNCIA (AV2): O abate só é efetivado se o alvo
+                // ainda pertencer ao lado do projétil no momento do impacto.
                 if (alvo.isAtivo() && collide(alvo)) {
-                    alvo.setAtivo(false);
-                    this.ativo = false;
-                    // Tiro ACERTOU — limpar reserva (alvo destruído)
-                    jogo.liberarAlvo(alvo);
-                    if (owner != null) owner.onProjetilFinished(this);
-                    // Log de acerto para auditoria
-                    ReconciliationLog.getInstance().logShot(
-                            this.x, this.y, alvo.getX(), alvo.getY(),
-                            this.x, this.y, true, this.lado.name());
-                    break;
+                    com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
+                    if (geom.determineLado(alvo.getX()) == this.lado) {
+                        if (alvo.tentarAbater(this.lado)) {
+                            this.ativo = false;
+                            // Tiro ACERTOU — limpar reserva (alvo destruído)
+                            jogo.liberarAlvo(alvo);
+                            if (owner != null) owner.onProjetilFinished(this);
+                            // Log de acerto para auditoria
+                            ReconciliationLog.getInstance().logShot(
+                                    this.x, this.y, alvo.getX(), alvo.getY(),
+                                    this.x, this.y, true, this.lado.name());
+                            break;
+                        }
+                    }
                 }
             }
         }

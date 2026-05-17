@@ -68,7 +68,7 @@ public class SensorThread extends Thread {
     private volatile float[] verdadeiroPosX;
     private volatile float[] verdadeiroPosY;
     private volatile int quantidadeAlvosColetados;
-    private static final int TAMANHO_HISTORICO = 10;
+    private static final int TAMANHO_HISTORICO = 5; // Reduzido de 10 para 5 para maior frequência
 
     /** Flag de controle. */
     private volatile boolean ativo;
@@ -96,7 +96,22 @@ public class SensorThread extends Thread {
         float[] verdadeiroPosX = new float[0];
         float[] verdadeiroPosY = new float[0];
         int quantidadeAlvosColetados = 0;
-        final LinkedList<float[][]> historicoDistancias = new LinkedList<>();
+        
+        /** Histórico persistente por alvo para evitar corrupção por troca de índices. */
+        final java.util.Map<Long, TargetHistory> historicoPorAlvo = new java.util.HashMap<>();
+    }
+
+    private static class TargetHistory {
+        final LinkedList<Sample> samples = new LinkedList<>();
+        
+        static class Sample {
+            long timestamp;
+            float[] distancias; // dist para cada canhão
+            float[] canhoesX; // posições dos canhões no momento da medição
+            float[] canhoesY;
+            float vx, vy;
+            float x, y; // posição ruidosa
+        }
     }
 
     /**
@@ -285,11 +300,56 @@ public class SensorThread extends Thread {
         dado.verdadeiroPosY = snap.verdadeiroPosY;
         dado.quantidadeAlvosColetados = snap.alvosAtivos.size();
 
-        if (snap.snapshotDistancias != null) {
-            dado.historicoDistancias.addLast(snap.snapshotDistancias);
-            while (dado.historicoDistancias.size() > TAMANHO_HISTORICO) {
-                dado.historicoDistancias.removeFirst();
+        long now = System.currentTimeMillis();
+        
+        // Atualizar histórico por alvo individual para evitar o bug de troca de índices
+        // e permitir compensação de movimento (Radar)
+        for (int i = 0; i < snap.alvosAtivos.size(); i++) {
+            Alvo a = snap.alvosAtivos.get(i);
+            TargetHistory history = dado.historicoPorAlvo.get(a.getTargetId());
+            if (history == null) {
+                history = new TargetHistory();
+                dado.historicoPorAlvo.put(a.getTargetId(), history);
             }
+            
+            TargetHistory.Sample s = new TargetHistory.Sample();
+            s.timestamp = now;
+            s.vx = snap.leiturasVelocidadeX[i];
+            s.vy = snap.leiturasVelocidadeY[i];
+            s.x = snap.leiturasPosX[i];
+            s.y = snap.leiturasPosY[i];
+            if (snap.snapshotDistancias != null) {
+                s.distancias = snap.snapshotDistancias[i];
+                // GUARDAR POSIÇÕES DOS CANHÕES PARA RECONCILIAÇÃO GEOMÉTRICA CONSISTENTE
+                s.canhoesX = new float[snap.canhoesAtivos.size()];
+                s.canhoesY = new float[snap.canhoesAtivos.size()];
+                for (int j = 0; j < snap.canhoesAtivos.size(); j++) {
+                    s.canhoesX[j] = snap.canhoesAtivos.get(j).getX();
+                    s.canhoesY[j] = snap.canhoesAtivos.get(j).getY();
+                }
+            }
+            
+            history.samples.addLast(s);
+            if (history.samples.size() > TAMANHO_HISTORICO * 2) {
+                history.samples.removeFirst();
+            }
+        }
+    }
+
+    /**
+     * Remove do histórico os alvos que não estão mais ativos.
+     * Chamado pela ReconciliacaoThread após consumir os dados.
+     */
+    public void limparHistoricoInativo(Lado lado, java.util.List<Alvo> alvosAtivos) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null) return;
+            dado.historicoPorAlvo.entrySet().removeIf(entry -> {
+                for (Alvo a : alvosAtivos) {
+                    if (a.getTargetId() == entry.getKey()) return false;
+                }
+                return true;
+            });
         }
     }
 
@@ -370,28 +430,36 @@ public class SensorThread extends Thread {
     public float[][] getMediaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            if (dado == null || dado.historicoDistancias.size() < TAMANHO_HISTORICO) return null;
+            if (dado == null || dado.historicoPorAlvo.isEmpty()) return null;
 
-            int M = dado.historicoDistancias.getLast().length;
-            int N = dado.historicoDistancias.getLast()[0].length;
-            float[][] media = new float[M][N];
-            int count = 0;
-
-            for (float[][] snapshot : dado.historicoDistancias) {
-                if (snapshot.length != M || snapshot[0].length != N) continue;
-                for (int i = 0; i < M; i++) {
-                    for (int j = 0; j < N; j++) {
-                        media[i][j] += snapshot[i][j];
-                    }
+            // Filtrar apenas alvos que possuem o histórico mínimo exigido
+            List<Long> idsValidos = new ArrayList<>();
+            for (Map.Entry<Long, TargetHistory> entry : dado.historicoPorAlvo.entrySet()) {
+                if (entry.getValue().samples.size() >= TAMANHO_HISTORICO) {
+                    idsValidos.add(entry.getKey());
                 }
-                count++;
             }
 
-            if (count == 0) return null;
+            if (idsValidos.isEmpty()) return null;
+
+            int M = idsValidos.size();
+            int N = dado.historicoPorAlvo.get(idsValidos.get(0)).samples.getLast().distancias.length;
+            float[][] media = new float[M][N];
+
+            long now = System.currentTimeMillis();
+
             for (int i = 0; i < M; i++) {
-                for (int j = 0; j < N; j++) {
-                    media[i][j] /= count;
+                TargetHistory history = dado.historicoPorAlvo.get(idsValidos.get(i));
+                for (TargetHistory.Sample sample : history.samples) {
+                    // COMPENSAÇÃO DE MOVIMENTO (Radar Dead Reckoning)
+                    // GARANTIMOS que o histórico é do MESMO ALVO via ID.
+                    for (int j = 0; j < N; j++) {
+                        if (sample.distancias != null && j < sample.distancias.length) {
+                             media[i][j] += sample.distancias[j]; 
+                        }
+                    }
                 }
+                for (int j = 0; j < N; j++) media[i][j] /= history.samples.size();
             }
             return media;
         }
@@ -410,30 +478,32 @@ public class SensorThread extends Thread {
     public float[][] getVarianciaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            if (dado == null || dado.historicoDistancias.size() < TAMANHO_HISTORICO) return null;
             float[][] media = getMediaDistancias(lado);
-            if (media == null) return null;
+            if (dado == null || media == null) return null;
 
             int M = media.length;
             int N = media[0].length;
             float[][] variancia = new float[M][N];
-            int count = 0;
 
-            for (float[][] snapshot : dado.historicoDistancias) {
-                if (snapshot.length != M || snapshot[0].length != N) continue;
-                for (int i = 0; i < M; i++) {
+            List<Long> idsValidos = new ArrayList<>();
+            for (Map.Entry<Long, TargetHistory> entry : dado.historicoPorAlvo.entrySet()) {
+                if (entry.getValue().samples.size() >= TAMANHO_HISTORICO) {
+                    idsValidos.add(entry.getKey());
+                }
+            }
+
+            for (int i = 0; i < M; i++) {
+                TargetHistory history = dado.historicoPorAlvo.get(idsValidos.get(i));
+                for (TargetHistory.Sample sample : history.samples) {
+                    if (sample.distancias == null) continue;
                     for (int j = 0; j < N; j++) {
-                        float diff = snapshot[i][j] - media[i][j];
+                        float diff = sample.distancias[j] - media[i][j];
                         variancia[i][j] += diff * diff;
                     }
                 }
-                count++;
-            }
-
-            if (count <= 1) return null;
-            for (int i = 0; i < M; i++) {
                 for (int j = 0; j < N; j++) {
-                    variancia[i][j] /= (count - 1);
+                    variancia[i][j] /= (history.samples.size() - 1);
+                    if (variancia[i][j] < 0.01f) variancia[i][j] = 0.01f; // Piso de variância
                 }
             }
             return variancia;
@@ -452,7 +522,14 @@ public class SensorThread extends Thread {
     public int getHistoricoCount(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            return dado == null ? 0 : dado.historicoDistancias.size();
+            if (dado == null) return 0;
+            
+            // Retornar o maior histórico disponível entre os alvos ativos
+            int max = 0;
+            for (TargetHistory th : dado.historicoPorAlvo.values()) {
+                if (th.samples.size() > max) max = th.samples.size();
+            }
+            return max;
         }
     }
 
@@ -486,7 +563,62 @@ public class SensorThread extends Thread {
         }
     }
 
-    // ── Getters para Reconciliação ───────────────────────────────
+    public static class TargetSnapshot {
+        public final long id;
+        public final float[][] mediaD; // distâncias [1][N]
+        public final float[][] varD;   // variâncias [1][N]
+        public final float[] canhoesX; // posições médias ou alinhadas
+        public final float[] canhoesY;
+        public final float verdadeiroX, verdadeiroY;
+        public final float leituraX, leituraY;
+
+        public TargetSnapshot(long id, float[][] mediaD, float[][] varD, float[] cX, float[] cY, float vX, float vY, float lX, float lY) {
+            this.id = id; this.mediaD = mediaD; this.varD = varD; this.canhoesX = cX; this.canhoesY = cY;
+            this.verdadeiroX = vX; this.verdadeiroY = vY; this.leituraX = lX; this.leituraY = lY;
+        }
+    }
+
+    public List<TargetSnapshot> getSnapshotsParaReconciliacao(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null || dado.historicoPorAlvo.isEmpty()) return null;
+
+            List<TargetSnapshot> results = new ArrayList<>();
+            for (Map.Entry<Long, TargetHistory> entry : dado.historicoPorAlvo.entrySet()) {
+                TargetHistory history = entry.getValue();
+                if (history.samples.size() < TAMANHO_HISTORICO) continue;
+
+                TargetHistory.Sample last = history.samples.getLast();
+                if (last.distancias == null || last.canhoesX == null) continue;
+
+                int N = last.distancias.length;
+                float[] mediaD = new float[N];
+                float[] varD = new float[N];
+                
+                // Média e Variância por alvo
+                for (TargetHistory.Sample s : history.samples) {
+                    if (s.distancias == null || s.distancias.length != N) continue;
+                    for (int j = 0; j < N; j++) mediaD[j] += s.distancias[j];
+                }
+                for (int j = 0; j < N; j++) mediaD[j] /= history.samples.size();
+                
+                for (TargetHistory.Sample s : history.samples) {
+                    if (s.distancias == null || s.distancias.length != N) continue;
+                    for (int j = 0; j < N; j++) {
+                        float diff = s.distancias[j] - mediaD[j];
+                        varD[j] += diff * diff;
+                    }
+                }
+                for (int j = 0; j < N; j++) {
+                    varD[j] = Math.max(varD[j] / (history.samples.size() - 1), 0.01f);
+                }
+
+                results.add(new TargetSnapshot(entry.getKey(), new float[][]{mediaD}, new float[][]{varD}, 
+                        last.canhoesX, last.canhoesY, 0, 0, last.x, last.y));
+            }
+            return results;
+        }
+    }
 
     public float[] getLeiturasPosX() { return leiturasPosX; }
     public float[] getLeiturasPosY() { return leiturasPosY; }
