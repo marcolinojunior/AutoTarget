@@ -108,6 +108,13 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // CONFIGURAR TRATAMENTO GLOBAL DE EXCEÇÕES PARA DEPURAÇÃO
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            Log.e("FATAL_ERROR", "Crash detectado na thread: " + thread.getName(), throwable);
+            // Salvar no logcat é o principal aqui
+            System.exit(1); 
+        });
+
         // Verificar autenticação
         FirebaseAuth auth = FirebaseAuth.getInstance();
         if (auth.getCurrentUser() == null) {

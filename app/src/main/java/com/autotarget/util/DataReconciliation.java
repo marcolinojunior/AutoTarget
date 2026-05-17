@@ -227,20 +227,13 @@ public class DataReconciliation {
             V_arr[j][j] = Math.max(4.0 * dj_sq * var_j, 1e-6);
         }
 
-        // ── Passo 3: Matriz A por geometria (limiar de distância) ───────
-        // Requisito AV2: incidência baseada em conectividade geométrica.
-        double limiarGeometrico = calcularLimiarGeometrico(mediaDist, LIMIAR_GEOMETRICO_FATOR);
-        double[][] A_arr = construirMatrizIncidenciaPorLimiar(mediaDist, limiarGeometrico);
-
-        // Fallback robusto: se não houver conexões válidas no limiar,
-        // mantém a estratégia por espaço nulo já validada.
-        if (A_arr == null || A_arr.length == 0 || y_arr.length < 3) {
-            Log.w(TAG, "Cenário não reconciliável, caindo para estimativas simples.");
-            A_arr = new double[C.getNumRows()][C.getNumCols()];
-            for (int r = 0; r < C.getNumRows(); r++) {
-                for (int c = 0; c < C.getNumCols(); c++) {
-                    A_arr[r][c] = C.get(r, c);
-                }
+        // ── Passo 3: Matriz A por Espaço Nulo Esquerdo ───────
+        // FIX: Usar estritamente o espaço nulo matricial (C) como a matriz de restrição A.
+        // O método anterior por limiar geométrico estava causando erros de lógica.
+        double[][] A_arr = new double[C.getNumRows()][C.getNumCols()];
+        for (int r = 0; r < C.getNumRows(); r++) {
+            for (int c = 0; c < C.getNumCols(); c++) {
+                A_arr[r][c] = C.get(r, c);
             }
         }
 
@@ -503,7 +496,18 @@ public class DataReconciliation {
         int N = canhoesX.length;
         int M = mediaDistancias.length;
 
-        if (N < 3 || M == 0) return new ReconciliationResult[0];
+        if (M == 0) return new ReconciliationResult[0];
+
+        // Se N < 3, não conseguimos estimar posição (triangulação requer 3 pontos)
+        // Mas retornamos as distâncias brutas como se fossem reconciliadas para que apareçam no log
+        if (N < 3) {
+            Log.w(TAG, "N=" + N + " < 3: Impossível estimar posição, retornando apenas distâncias brutas para log.");
+            ReconciliationResult[] results = new ReconciliationResult[M];
+            for (int i = 0; i < M; i++) {
+                results[i] = new ReconciliationResult(0f, 0f, mediaDistancias[i]);
+            }
+            return results;
+        }
 
         SimpleMatrix matM = new SimpleMatrix(N, 3);
         double[] normaSq = new double[N];

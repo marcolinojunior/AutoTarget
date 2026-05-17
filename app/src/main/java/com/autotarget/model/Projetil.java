@@ -197,6 +197,9 @@ public class Projetil implements Runnable {
                 ativo = false;
                 jogo.liberarAlvo(alvoReservado);
                 if (owner != null) owner.onProjetilFinished(this);
+            } catch (Exception e) {
+                android.util.Log.e("DEBUG_PROJETIL", "Erro no loop do projétil", e);
+                ativo = false;
             }
         }
     }

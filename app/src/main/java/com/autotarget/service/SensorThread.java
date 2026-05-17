@@ -128,20 +128,29 @@ public class SensorThread extends Thread {
     public void run() {
         com.autotarget.util.ThreadAffinityHelper.setAffinityForBackgroundTask(android.os.Process.myTid());
 
-        while (ativo) {
-            long startNs = System.nanoTime();
-            try {
-                coletarDados();
-                Thread.sleep(INTERVALO_COLETA);
+        try {
+            while (ativo) {
+                long startNs = System.nanoTime();
+                try {
+                    coletarDados();
+                    Thread.sleep(INTERVALO_COLETA);
 
-                // Instrumentação RMA
-                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
-                RMAAnalysis.checkDeadline("T7-Sensor", elapsedMs, INTERVALO_COLETA);
+                    // Instrumentação RMA
+                    long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                    RMAAnalysis.checkDeadline("T7-Sensor", elapsedMs, INTERVALO_COLETA);
 
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                ativo = false;
+                } catch (InterruptedException e) {
+                    Log.w(TAG, "SensorThread interrompida.");
+                    Thread.currentThread().interrupt();
+                    ativo = false;
+                } catch (Exception e) {
+                    Log.e(TAG, "Erro no loop de coleta de dados", e);
+                }
             }
+        } catch (Exception e) {
+            Log.e(TAG, "ERRO FATAL na SensorThread", e);
+        } finally {
+            Log.i(TAG, "SensorThread finalizada.");
         }
     }
 

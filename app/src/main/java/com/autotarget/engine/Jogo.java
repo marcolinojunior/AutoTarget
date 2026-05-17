@@ -103,6 +103,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.Executors;
@@ -148,10 +149,10 @@ public class Jogo {
     private volatile Estado estado;
 
     /** Listas por lado (exigência AV2) */
-    private final ArrayList<Alvo> alvosEsquerdo;
-    private final ArrayList<Alvo> alvosDireito;
-    private final ArrayList<Canhao> canhoesEsquerdo;
-    private final ArrayList<Canhao> canhoesDireito;
+    private final List<Alvo> alvosEsquerdo;
+    private final List<Alvo> alvosDireito;
+    private final List<Canhao> canhoesEsquerdo;
+    private final List<Canhao> canhoesDireito;
     
     private final Object listLock = new Object();
     private final Object canhoesLock = new Object();
@@ -237,10 +238,10 @@ public class Jogo {
 
     public Jogo(Context context) {
         this.context = context;
-        this.alvosEsquerdo = new ArrayList<>(50);
-        this.alvosDireito = new ArrayList<>(50);
-        this.canhoesEsquerdo = new ArrayList<>(10);
-        this.canhoesDireito = new ArrayList<>(10);
+        this.alvosEsquerdo = new CopyOnWriteArrayList<>();
+        this.alvosDireito = new CopyOnWriteArrayList<>();
+        this.canhoesEsquerdo = new CopyOnWriteArrayList<>();
+        this.canhoesDireito = new CopyOnWriteArrayList<>();
         this.estado = Estado.PARADO;
         this.pontuacaoEsquerdo.set(0);
         this.pontuacaoDireito.set(0);
@@ -267,6 +268,7 @@ public class Jogo {
         }
 
         estado = Estado.RODANDO;
+        Log.i("DEBUG_JOGO", "Iniciando partida...");
         pontuacaoEsquerdo.set(0);
         pontuacaoDireito.set(0);
         // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
@@ -305,6 +307,7 @@ public class Jogo {
                 aplicarPenalidades();
                 registrarMetricasEnergiaPenalidade();
                 registrarMetricasEstruturadas();
+                logMemoria();
                 notificarTempo();
                 notificarEnergia();
 
@@ -775,7 +778,8 @@ public class Jogo {
     private void spawnarAlvo() {
         if (larguraTela <= 0 || alturaTela <= 0) return;
 
-        int quantidadeSpawns = (tempoRestante <= 30) ? 4 : 1;
+        // Aumentado para 4 spawns desde o início para maior intensidade e dados de reconciliação
+        int quantidadeSpawns = 4;
 
         for (int i = 0; i < quantidadeSpawns; i++) {
             float x = RAIO_ALVO + random.nextFloat() * (larguraTela - 2 * RAIO_ALVO);
@@ -1119,6 +1123,16 @@ public class Jogo {
 
     public static float getEnergiaMaxima() { return ENERGIA_MAXIMA; }
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
+
+    private void logMemoria() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemory = runtime.maxMemory();
+        long totalMemory = runtime.totalMemory();
+        long freeMemory = runtime.freeMemory();
+        long usedMemory = totalMemory - freeMemory;
+        Log.i("DEBUG_MEM", String.format(Locale.US, "Memória (MB) - Usada: %d, Total: %d, Max: %d",
+                usedMemory / (1024 * 1024), totalMemory / (1024 * 1024), maxMemory / (1024 * 1024)));
+    }
 
     /**
      * Registra métricas estruturadas para profiling e análise de desempenho.

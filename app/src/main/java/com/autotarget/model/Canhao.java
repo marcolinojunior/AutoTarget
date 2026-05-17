@@ -128,6 +128,7 @@ public class Canhao extends Thread {
 
     @Override
     public void run() {
+        Log.i(TAG, "Thread do canhão " + lado + " iniciada: " + getName());
         while (ativo) {
             long startNs = System.nanoTime();
             try {
@@ -146,7 +147,10 @@ public class Canhao extends Thread {
                     disparar();
                 }
 
-                if (!ativo) break; // Garante que a parada seja imediata, sem atraso residual
+                if (!ativo) {
+                    Log.i(TAG, "Canhão " + lado + " desativado durante ciclo.");
+                    break;
+                }
 
                 limparProjetisInativos();
 
@@ -159,11 +163,15 @@ public class Canhao extends Thread {
                 RMAAnalysis.checkDeadline("T6-Canhao", elapsedMs, intervaloDisparo);
 
             } catch (InterruptedException e) {
+                Log.w(TAG, "Thread do canhão " + lado + " interrompida.");
                 Thread.currentThread().interrupt();
                 ativo = false;
                 break;
+            } catch (Exception e) {
+                Log.e(TAG, "ERRO INESPERADO no loop do canhão " + lado, e);
             }
         }
+        Log.i(TAG, "Thread do canhão " + lado + " finalizada.");
     }
 
     // ── Disparo ──────────────────────────────────────────────────
@@ -279,16 +287,15 @@ public class Canhao extends Thread {
     }
 
     private void limparProjetisInativos() {
-        synchronized (projeteis) {
-            java.util.Iterator<Projetil> it = projeteis.iterator();
-            while (it.hasNext()) {
-                Projetil p = it.next();
-                if (!p.isAtivo()) {
-                    it.remove();
-                    com.autotarget.util.ProjetilPool.liberar(p);
-                }
+        // CopyOnWriteArrayList iterators do not support remove().
+        // Use removeIf for thread-safe removal of inactive projectiles.
+        projeteis.removeIf(p -> {
+            if (!p.isAtivo()) {
+                com.autotarget.util.ProjetilPool.liberar(p);
+                return true;
             }
-        }
+            return false;
+        });
     }
 
     /**

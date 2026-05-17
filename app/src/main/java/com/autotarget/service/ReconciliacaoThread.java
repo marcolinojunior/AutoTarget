@@ -24,7 +24,7 @@ public class ReconciliacaoThread extends Thread {
     private static final double LIMIAR_GANHO = 0.01;
     private static final float ENERGIA_SEGURA_MINIMA = 3f;
     private static final float ENERGIA_CRITICA = 5f;
-    private static final float RAZAO_PRESSAO_TATICA = 1.5f;
+    private static final float RAZAO_PRESSAO_TATICA = 1.0f;
     private static final int MAX_CANHOES_POR_LADO = 10;
     private static final int INTERVALO_TATICO = 3000;
     private static final int INTERVALO_RECONCILIACAO = 10000;
@@ -81,31 +81,40 @@ public class ReconciliacaoThread extends Thread {
             return;
         }
 
-        avaliarPressaoTatica(Lado.ESQUERDO);
-        avaliarPressaoTatica(Lado.DIREITO);
-        long ultimoCicloReconciliacaoMs = System.currentTimeMillis();
+        try {
+            avaliarPressaoTatica(Lado.ESQUERDO);
+            avaliarPressaoTatica(Lado.DIREITO);
+            long ultimoCicloReconciliacaoMs = System.currentTimeMillis();
 
-        while (ativo) {
-            long startNs = System.nanoTime();
-            try {
-                Thread.sleep(INTERVALO_TATICO);
-                if (!ativo) break;
+            while (ativo) {
+                long startNs = System.nanoTime();
+                try {
+                    Thread.sleep(INTERVALO_TATICO);
+                    if (!ativo) break;
 
-                avaliarPressaoTatica(Lado.ESQUERDO);
-                avaliarPressaoTatica(Lado.DIREITO);
-                ciclosTaticos++;
-                long agora = System.currentTimeMillis();
-                if (agora - ultimoCicloReconciliacaoMs >= INTERVALO_RECONCILIACAO) {
-                    executarReconciliacaoCompleta();
-                    ultimoCicloReconciliacaoMs = agora;
+                    avaliarPressaoTatica(Lado.ESQUERDO);
+                    avaliarPressaoTatica(Lado.DIREITO);
+                    ciclosTaticos++;
+                    long agora = System.currentTimeMillis();
+                    if (agora - ultimoCicloReconciliacaoMs >= INTERVALO_RECONCILIACAO) {
+                        executarReconciliacaoCompleta();
+                        ultimoCicloReconciliacaoMs = agora;
+                    }
+
+                    long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                    RMAAnalysis.checkDeadline("T8-Reconciliacao", elapsedMs, INTERVALO_TATICO);
+                } catch (InterruptedException e) {
+                    Log.w(TAG, "ReconciliacaoThread interrompida.");
+                    Thread.currentThread().interrupt();
+                    ativo = false;
+                } catch (Exception e) {
+                    Log.e(TAG, "Erro no loop tático/reconciliação", e);
                 }
-
-                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
-                RMAAnalysis.checkDeadline("T8-Reconciliacao", elapsedMs, INTERVALO_TATICO);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                ativo = false;
             }
+        } catch (Exception e) {
+            Log.e(TAG, "ERRO FATAL na ReconciliacaoThread", e);
+        } finally {
+            Log.i(TAG, "ReconciliacaoThread finalizada.");
         }
     }
 
