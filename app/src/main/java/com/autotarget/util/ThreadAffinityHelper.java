@@ -85,11 +85,35 @@ public class ThreadAffinityHelper {
                     .getDeclaredMethod("setThreadAffinityMask", int.class, int.class);
             method.setAccessible(true);
             method.invoke(null, threadId, mask);
-            Log.i(TAG, "Afinidade aplicada via Process.setThreadAffinityMask");
+            Log.i(TAG, "Afinidade aplicada via Process.setThreadAffinityMask para thread " + threadId + " com máscara " + mask);
             return;
-        } catch (Throwable ignored) {
-            // Fallback abaixo.
+        } catch (Throwable e) {
+            Log.w(TAG, "Process.setThreadAffinityMask não disponível via reflexão (fallback para JNI). Motivo: " + e.getMessage());
         }
         trySetAffinity(threadId, mask);
+    }
+
+    /**
+     * Define a afinidade para tarefas críticas de alto desempenho (ex: Motor de Física).
+     * @param threadId ID da thread (obtido via android.os.Process.myTid())
+     */
+    public static void setAffinityForCriticalTask(int threadId) {
+        trySetAffinityPreferProcessApi(threadId, BIG_CORES);
+    }
+
+    /**
+     * Define a afinidade para tarefas de prioridade média (ex: Renderização de UI).
+     * @param threadId ID da thread (obtido via android.os.Process.myTid())
+     */
+    public static void setAffinityForMediumTask(int threadId) {
+        trySetAffinityPreferProcessApi(threadId, BIG_CORES);
+    }
+
+    /**
+     * Define a afinidade para tarefas de processamento de fundo (ex: Sensores, Reconciliação).
+     * @param threadId ID da thread (obtido via android.os.Process.myTid())
+     */
+    public static void setAffinityForBackgroundTask(int threadId) {
+        trySetAffinityPreferProcessApi(threadId, LITTLE_CORES);
     }
 }

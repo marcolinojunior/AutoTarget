@@ -681,8 +681,7 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         @Override
         public void run() {
             // T4 (Renderização): High Priority (UI), deve usar BIG cores para 30 FPS estável
-            com.autotarget.util.ThreadAffinityHelper.trySetAffinityPreferProcessApi(
-                    android.os.Process.myTid(), com.autotarget.util.ThreadAffinityHelper.BIG_CORES);
+            com.autotarget.util.ThreadAffinityHelper.setAffinityForMediumTask(android.os.Process.myTid());
 
             long targetTime = 1000 / TARGET_FPS;
             while (running) {
