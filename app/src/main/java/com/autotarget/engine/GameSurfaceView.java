@@ -332,12 +332,16 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
                 // Verificar se tocou num canhão existente (proteção por lock)
                 synchronized (dragLock) {
                     draggedCanhao = null;
-                    for (Canhao c : jogo.getCanhoesEsquerdo()) {
-                        if (!c.isAtivo()) continue;
-                        float dist = Alvo.calcularDistancia(c.getX(), c.getY(), touchX, touchY);
-                        if (dist < RAIO_TOQUE) {
-                            draggedCanhao = c;
-                            break;
+                    synchronized(jogo.getCanhoesLock()) {
+                        java.util.List<Canhao> canhoesEsq = jogo.getCanhoesEsquerdo();
+                        for (int i = 0; i < canhoesEsq.size(); i++) {
+                            Canhao c = canhoesEsq.get(i);
+                            if (!c.isAtivo()) continue;
+                            float dist = Alvo.calcularDistancia(c.getX(), c.getY(), touchX, touchY);
+                            if (dist < RAIO_TOQUE) {
+                                draggedCanhao = c;
+                                break;
+                            }
                         }
                     }
                 }
@@ -347,9 +351,11 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
                     try {
                         jogo.adicionarCanhao(touchX, touchY, Lado.ESQUERDO);
                         // Pegar o recém-criado
-                        java.util.List<Canhao> lista = jogo.getCanhoesEsquerdo();
-                        if (!lista.isEmpty()) {
-                            draggedCanhao = lista.get(lista.size() - 1);
+                        synchronized(jogo.getCanhoesLock()) {
+                            java.util.List<Canhao> lista = jogo.getCanhoesEsquerdo();
+                            if (!lista.isEmpty()) {
+                                draggedCanhao = lista.get(lista.size() - 1);
+                            }
                         }
                     } catch (JogoException e) {
                         Log.w("GameSurface", "Drag: " + e.getMessage());
@@ -431,7 +437,10 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         }
 
         // ── Canhões (cor diferente por lado) ──
-        for (Canhao canhao : jogo.getCanhoes()) {
+        // jogo.getCanhoes() já retorna uma cópia de forma thread-safe devido ao synchronized interno.
+        java.util.List<Canhao> canhoes = jogo.getCanhoes();
+        for (int i = 0; i < canhoes.size(); i++) {
+            Canhao canhao = canhoes.get(i);
             if (!canhao.isAtivo()) continue;
             Paint paintCanhao = (canhao.getLado() == Lado.ESQUERDO) ? paintCanhaoEsq : paintCanhaoDir;
             desenharCanhao(canvas, canhao, paintCanhao);
@@ -508,8 +517,12 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         paintTexto.setTextSize(18f);
         paintTexto.setColor(Color.parseColor("#00B4D8"));
         
-        int nCanhoesEsq = jogo.getCanhoesEsquerdo().size();
-        int nCanhoeDir = jogo.getCanhoesDireito().size();
+        int nCanhoesEsq = 0;
+        int nCanhoeDir = 0;
+        synchronized(jogo.getCanhoesLock()) {
+            nCanhoesEsq = jogo.getCanhoesEsquerdo().size();
+            nCanhoeDir = jogo.getCanhoesDireito().size();
+        }
         float fatorEsq = 1.0f + Math.max(0, nCanhoesEsq - Jogo.getLimiarPenalidade()) * 0.2f;
         float fatorDir = 1.0f + Math.max(0, nCanhoeDir - Jogo.getLimiarPenalidade()) * 0.2f;
 
