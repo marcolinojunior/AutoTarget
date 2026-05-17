@@ -776,15 +776,17 @@ public class Jogo {
             }
         }
 
-        if (!transferBufferDireita.isEmpty()) {
-            alvosEsquerdo.removeAll(transferBufferDireita);
-            alvosDireito.addAll(transferBufferDireita);
-            for (Alvo alvo : transferBufferDireita) liberarAlvo(alvo);
-        }
-        if (!transferBufferEsquerda.isEmpty()) {
-            alvosDireito.removeAll(transferBufferEsquerda);
-            alvosEsquerdo.addAll(transferBufferEsquerda);
-            for (Alvo alvo : transferBufferEsquerda) liberarAlvo(alvo);
+        synchronized (listLock) {
+            if (!transferBufferDireita.isEmpty()) {
+                alvosEsquerdo.removeAll(transferBufferDireita);
+                alvosDireito.addAll(transferBufferDireita);
+                for (Alvo alvo : transferBufferDireita) liberarAlvo(alvo);
+            }
+            if (!transferBufferEsquerda.isEmpty()) {
+                alvosDireito.removeAll(transferBufferEsquerda);
+                alvosEsquerdo.addAll(transferBufferEsquerda);
+                for (Alvo alvo : transferBufferEsquerda) liberarAlvo(alvo);
+            }
         }
 
         if (!transferBufferDireita.isEmpty() || !transferBufferEsquerda.isEmpty()) {

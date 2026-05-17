@@ -113,7 +113,9 @@ public class JogoFronteiraTest {
                 java.lang.reflect.Field xField = Alvo.class.getDeclaredField("x");
                 xField.setAccessible(true);
                 xField.set(alvo1, 501f); // Cruza a linha
-                transferirMethod.invoke(jogo);
+                synchronized(jogo.getCollisionLock()) {
+                    transferirMethod.invoke(jogo);
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
