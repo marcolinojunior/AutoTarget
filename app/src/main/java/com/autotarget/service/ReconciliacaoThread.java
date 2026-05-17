@@ -72,6 +72,10 @@ public class ReconciliacaoThread extends Thread {
 
     @Override
     public void run() {
+        // T8 (Reconciliação): Thread pesada, deve ir para background cores (LITTLE) para não travar UI
+        com.autotarget.util.ThreadAffinityHelper.trySetAffinityPreferProcessApi(
+                android.os.Process.myTid(), com.autotarget.util.ThreadAffinityHelper.LITTLE_CORES);
+
         try {
             Thread.sleep(500);
         } catch (InterruptedException e) {
@@ -513,20 +517,27 @@ public class ReconciliacaoThread extends Thread {
 
         boolean usouEJML = (nCanhoes >= 4);
         double somaErroAntes = 0, somaErroDepois = 0, somaReducao = 0;
+        double somaVarAntes = 0, somaVarDepois = 0;
         
         for (int i = 0; i < resultados.length; i++) {
             DataReconciliation.ReconciliationResult r = resultados[i];
             if (r == null) continue;
             float[] brutas = (i < mediaD.length) ? mediaD[i] : new float[0];
 
+            double[] brutasDouble = floatArrayToDouble(brutas);
+            double[] reconDouble = floatArrayToDouble(r.distanciasReconciliadas);
+
             // Calcular erro RMS para este alvo
-            double[] erros = DataReconciliation.calcularErroRMS(
-                    floatArrayToDouble(brutas),
-                    floatArrayToDouble(r.distanciasReconciliadas)
-            );
+            double[] erros = DataReconciliation.calcularErroRMS(brutasDouble, reconDouble);
             somaErroAntes += erros[0];
             somaErroDepois += erros[1];
             somaReducao += erros[2];
+
+            // Calcular Variância para log de auditoria
+            double varAntes = DataReconciliation.calcularVariancia(brutasDouble);
+            double varDepois = DataReconciliation.calcularVariancia(reconDouble);
+            somaVarAntes += varAntes;
+            somaVarDepois += varDepois;
 
             // Registrar para visualização em dashboard/relatório
             ReconciliationVisualizer.registrarPonto(i, brutas, r.distanciasReconciliadas,
@@ -548,23 +559,27 @@ public class ReconciliacaoThread extends Thread {
                     r.normA_yHat, usouEJML, lado.name());
         }
         
-        // Log estruturado com métrica de erro
+        // Log estruturado com métrica de erro e variância
         if (resultados.length > 0) {
             double mediaReducao = somaReducao / resultados.length;
             Log.i(TAG, String.format(Locale.US,
-                    "RECONCILIACAO_RMS lado=%s, alvos=%d, erroAntes=%.2f, erroDepois=%.2f, reducao=%.1f%%",
+                    "RECONCILIACAO_RMS lado=%s, alvos=%d, erroAntes=%.2f, erroDepois=%.2f, reducao=%.1f%% | varAntes=%.2f, varDepois=%.2f",
                     lado.name(), resultados.length, 
                     somaErroAntes / resultados.length,
                     somaErroDepois / resultados.length,
-                    mediaReducao));
+                    mediaReducao,
+                    somaVarAntes / resultados.length,
+                    somaVarDepois / resultados.length));
             
             // Log estruturado para profiling/plotter
             Log.i("AUTOTARGET_METRICS", String.format(Locale.US,
-                    "Lado:%s,Alvos:%d,ErroRMS_Antes:%.2f,ErroRMS_Depois:%.2f,Reducao:%.1f%%",
+                    "Lado:%s,Alvos:%d,ErroRMS_Antes:%.2f,ErroRMS_Depois:%.2f,Reducao:%.1f%%,VarAntes:%.2f,VarDepois:%.2f",
                     lado.name(), resultados.length,
                     somaErroAntes / resultados.length,
                     somaErroDepois / resultados.length,
-                    mediaReducao));
+                    mediaReducao,
+                    somaVarAntes / resultados.length,
+                    somaVarDepois / resultados.length));
         }
     }
 
