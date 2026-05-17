@@ -58,7 +58,7 @@ import com.autotarget.util.ReconciliationLog;
  * na direção definida no momento do disparo. Verifica colisão contra
  * a lista compartilhada de alvos usando sincronização explícita.
  */
-public class Projetil extends Thread {
+public class Projetil implements Runnable {
 
     // ── Atributos ────────────────────────────────────────────────
     private float x;
@@ -130,6 +130,10 @@ public class Projetil extends Thread {
         this.owner = owner;
         this.ativo = true;
     }
+
+    public void start() {} // Dummy start for compatibility
+
+    public void interrupt() {} // Dummy interrupt for compatibility
 
     // Compatibilidade: construtor antigo sem owner
     public Projetil(float x, float y, float direcaoX, float direcaoY,

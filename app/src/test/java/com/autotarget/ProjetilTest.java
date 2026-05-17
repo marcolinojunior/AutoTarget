@@ -173,7 +173,7 @@ public class ProjetilTest {
     public void testProjetilEhThread() {
         Projetil projetil = new Projetil(100, 100, 1, 0, 10,
                 alvos, collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, null);
-        assertTrue("Projetil deve ser uma Thread", projetil instanceof Thread);
+        assertTrue("Projetil deve ser um Runnable", projetil instanceof Runnable);
     }
 
     @Test
@@ -192,8 +192,9 @@ public class ProjetilTest {
 
         Projetil projetil = new Projetil(LARGURA - 2, 30, 1, 0, 20,
                 jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
-        projetil.start();
-        projetil.join(500);
+        Thread t = new Thread(projetil);
+        t.start();
+        t.join(500);
 
         Alvo reservadoPorOutroCanhao = jogo.reservarAlvo(c2);
         assertSame("Reserva deve ser liberada quando projétil erra e sai da tela", alvo, reservadoPorOutroCanhao);
@@ -212,8 +213,9 @@ public class ProjetilTest {
 
         Projetil projetil = new Projetil(100, 100, 1, 0, 1,
                 jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
-        projetil.start();
-        projetil.join(500);
+        Thread t = new Thread(projetil);
+        t.start();
+        t.join(500);
 
         ConcurrentHashMap<Alvo, Canhao> reservas = getReservas(jogo);
         assertFalse("Reserva deve ser removida quando projétil acerta o alvo", reservas.containsKey(alvo));
@@ -232,10 +234,11 @@ public class ProjetilTest {
 
         Projetil projetil = new Projetil(20, 20, 0.5f, 0.7f, 8,
                 jogo.getAlvosEsquerdo(), collisionLock, LARGURA, ALTURA, jogo, Lado.ESQUERDO, reservado);
-        projetil.start();
+        Thread t = new Thread(projetil);
+        t.start();
         Thread.sleep(30);
-        projetil.interrupt();
-        projetil.join(500);
+        t.interrupt();
+        t.join(500);
 
         ConcurrentHashMap<Alvo, Canhao> reservas = getReservas(jogo);
         assertFalse("Reserva deve ser removida quando projétil é interrompido", reservas.containsKey(alvo));

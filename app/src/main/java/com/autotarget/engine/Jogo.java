@@ -772,19 +772,19 @@ public class Jogo {
         transferBufferEsquerda.clear();
 
         com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
-        // Remover bloqueios globais iterando sob uma view atomicamente segura:
-        for (Alvo alvo : alvosEsquerdo) {
-            if (geom.determineLado(alvo.getX()) == Lado.DIREITO) {
-                transferBufferDireita.add(alvo);
-            }
-        }
-        for (Alvo alvo : alvosDireito) {
-            if (geom.determineLado(alvo.getX()) == Lado.ESQUERDO) {
-                transferBufferEsquerda.add(alvo);
-            }
-        }
 
         synchronized (listLock) {
+            for (Alvo alvo : alvosEsquerdo) {
+                if (geom.determineLado(alvo.getX()) == Lado.DIREITO) {
+                    transferBufferDireita.add(alvo);
+                }
+            }
+            for (Alvo alvo : alvosDireito) {
+                if (geom.determineLado(alvo.getX()) == Lado.ESQUERDO) {
+                    transferBufferEsquerda.add(alvo);
+                }
+            }
+
             if (!transferBufferDireita.isEmpty()) {
                 alvosEsquerdo.removeAll(transferBufferDireita);
                 alvosDireito.addAll(transferBufferDireita);

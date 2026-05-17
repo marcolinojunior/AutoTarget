@@ -46,14 +46,14 @@ public class DataReconciliationTest {
 
         assertNotNull(a);
         assertEquals(2, a.length);
-        assertEquals(4, a[0].length);
+        assertEquals(5, a[0].length);
 
-        // conectados esperados (sem canhão 0): 1,2,4 -> índices internos 0,1,3
-        // linhas: [1,-1,0,0] e [0,1,0,-1]
-        assertEquals(1.0, a[0][0], 1e-9);
-        assertEquals(-1.0, a[0][1], 1e-9);
-        assertEquals(1.0, a[1][1], 1e-9);
-        assertEquals(-1.0, a[1][3], 1e-9);
+        // conectados esperados: 1,2,4 -> índices 1,2,4
+        // linhas: [0, 1,-1,0,0] e [0, 0,1,0,-1]
+        assertEquals(1.0, a[0][1], 1e-9);
+        assertEquals(-1.0, a[0][2], 1e-9);
+        assertEquals(1.0, a[1][2], 1e-9);
+        assertEquals(-1.0, a[1][4], 1e-9);
     }
 
     @Test
