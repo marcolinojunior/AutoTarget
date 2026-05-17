@@ -72,9 +72,13 @@ public class ReconciliacaoThread extends Thread {
 
     @Override
     public void run() {
-        // T8 (Reconciliação): Thread pesada, deve ir para background cores (LITTLE) para não travar UI
-        com.autotarget.util.ThreadAffinityHelper.trySetAffinityPreferProcessApi(
-                android.os.Process.myTid(), com.autotarget.util.ThreadAffinityHelper.LITTLE_CORES);
+        try {
+            java.lang.reflect.Method method = android.os.Process.class.getDeclaredMethod("setThreadAffinityMask", int.class, int.class);
+            method.setAccessible(true);
+            method.invoke(null, android.os.Process.myTid(), 0b0011);
+        } catch (Exception e) {
+            Log.w(TAG, "Process Affinity setup falhou", e);
+        }
 
         try {
             Thread.sleep(500);
@@ -439,7 +443,7 @@ public class ReconciliacaoThread extends Thread {
             float sumWX = 0, sumWY = 0, sumW = 0;
             for (DataReconciliation.ReconciliationResult r : cluster) {
                 float dist = Alvo.calcularDistancia(canhao.getX(), canhao.getY(), r.x, r.y);
-                float w = (float) Math.exp(-BETA * Math.max(dist, 1f));
+                float w = 1f / Math.max(dist, 1f);
                 sumWX += w * r.x;
                 sumWY += w * r.y;
                 sumW += w;

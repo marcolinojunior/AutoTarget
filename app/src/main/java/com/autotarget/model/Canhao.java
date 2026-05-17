@@ -38,6 +38,8 @@ import com.autotarget.util.ReconciliationLog;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Canhão autônomo que opera em sua própria thread.
@@ -94,6 +96,8 @@ public class Canhao extends Thread {
     /** Limites da tela. */
     private int larguraTela;
     private int alturaTela;
+
+    private static final ExecutorService projeteisPool = Executors.newFixedThreadPool(20);
 
     // ── Construtor ───────────────────────────────────────────────
 
@@ -250,7 +254,7 @@ public class Canhao extends Thread {
             synchronized (projeteis) {
                 projeteis.add(projetil);
             }
-            projetil.start();
+            projeteisPool.execute(projetil);
             disparoEfetivado = true;
 
             // Log do disparo para auditoria de reconciliação
@@ -351,7 +355,6 @@ public class Canhao extends Thread {
         synchronized (projeteis) {
             for (Projetil p : projeteis) {
                 p.setAtivo(false);
-                p.interrupt();
             }
         }
     }
