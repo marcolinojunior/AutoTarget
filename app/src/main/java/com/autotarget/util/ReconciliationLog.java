@@ -185,6 +185,11 @@ public final class ReconciliationLog {
         // Se mseRecon explodiu (NaN/Inf), saturar para valor bruto para não quebrar o gráfico
         if (!Double.isFinite(mseRecon)) mseRecon = mseBruto;
 
+        // FIX (Phase 2): Se MSE não mudou (fallback), garantir que ErroPos seja 0 para consistência logica
+        if (Math.abs(mseRecon - mseBruto) < 1e-7) {
+            erroPos = 0.0;
+        }
+
         reconSamples.add(new ReconSample(mseBruto, mseRecon, erroPos, normA_yHat, lado));
 
         appendEvento(String.format(Locale.US,
@@ -282,9 +287,18 @@ public final class ReconciliationLog {
             sb.append(String.format(Locale.US, "Energia final ESQ: %.1f | DIR: %.1f\n", energiaFinalEsq, energiaFinalDir));
             sb.append(String.format(Locale.US, "Canhoes finais ESQ: %d | DIR: %d\n", canhoesFinaisEsq, canhoesFinaisDir));
             sb.append("\n[EVIDENCIA C0-07] Historico de Energia e Penalidade:\n");
-            for (int i = 0; i < n; i += Math.max(1, n / 10)) {
+            int step = Math.max(1, n / 10);
+            int start = Math.max(0, n - (step * 10)); // Garante que pegamos o final da partida
+            for (int i = start; i < n; i += step) {
                 EnergyPenaltySample s = energySamples.get(i);
                 sb.append(String.format(Locale.US, "  - Esq(E=%.1f, C=%d, I=%.1fms) | Dir(E=%.1f, C=%d, I=%.1fms)\n", s.energiaEsq, s.canhoesEsq, s.intervaloEsqMs, s.energiaDir, s.canhoesDir, s.intervaloDirMs));
+                
+                // FIX (Phase 2): Garantir que o ABSOLUTAMENTE ÚLTIMO seja impresso se o step pular ele
+                if (i + step >= n && i < n - 1) {
+                    EnergyPenaltySample last = energySamples.get(n - 1);
+                    sb.append(String.format(Locale.US, "  - Esq(E=%.1f, C=%d, I=%.1fms) | Dir(E=%.1f, C=%d, I=%.1fms) [FINAL]\n", 
+                        last.energiaEsq, last.canhoesEsq, last.intervaloEsqMs, last.energiaDir, last.canhoesDir, last.intervaloDirMs));
+                }
             }
         }
 

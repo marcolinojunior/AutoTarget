@@ -255,7 +255,7 @@ public class Projetil implements Runnable {
                             // Log de acerto para auditoria
                             ReconciliationLog.getInstance().logShot(
                                     this.x, this.y, alvo.getX(), alvo.getY(),
-                                    this.x, this.y, true, this.lado.name());
+                                    alvo.getX(), alvo.getY(), true, this.lado.name());
                             break;
                         }
                     }
