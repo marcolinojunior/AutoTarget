@@ -32,6 +32,7 @@ public class ReconciliacaoThread extends Thread {
     private static final float ENERGIA_CRITICA = 5f;
     private static final float RAZAO_PRESSAO_TATICA = 1.0f;
     private static final int MAX_CANHOES_POR_LADO = 10;
+    private static final double LIMIAR_SOBREVIDA_SEGUNDOS = 12.0;
     private static final int INTERVALO_TATICO = 3000;
     private static final int INTERVALO_RECONCILIACAO = 10000;
 
@@ -51,7 +52,7 @@ public class ReconciliacaoThread extends Thread {
     public interface OnReconciliacaoListener {
         void onReconciliacaoConcluida(int totalReconciliacoes);
         void onSugestaoAdicionarCanhao(Lado lado, float x, float y);
-        void onSugestaoRemoverCanhao(Lado lado);
+        void onSugestaoRemoverCanhao(Lado lado, Canhao canhao);
         void onRealocarCanhao(Canhao canhao, float novoX, float novoY);
     }
 
@@ -118,9 +119,13 @@ public class ReconciliacaoThread extends Thread {
         executarReconciliacaoPorLado(Lado.DIREITO);
     }
 
-    private void executarReconciliacaoPorLado(Lado lado) {
+    private boolean executarReconciliacaoPorLado(Lado lado) {
+        if (sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
+            return false;
+        }
+
         List<SensorThread.TargetSnapshot> targets = sensorThread.getSnapshotsParaReconciliacao(lado);
-        if (targets == null || targets.isEmpty()) return;
+        if (targets == null || targets.isEmpty()) return false;
 
         int reconciliacoesNoCiclo = 0;
         List<DataReconciliation.ReconciliationResult> todosResultados = new ArrayList<>();
@@ -150,6 +155,7 @@ public class ReconciliacaoThread extends Thread {
             realocarCanhoes(lado, coletarCanhoesAtivos(lado), resultsArr);
         }
         sensorThread.limparHistoricoInativo(lado, lado == Lado.ESQUERDO ? jogo.getAlvosEsquerdo() : jogo.getAlvosDireito());
+        return reconciliacoesNoCiclo > 0;
     }
 
     private void avaliarPressaoTatica(Lado lado) {
@@ -196,7 +202,170 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private void avaliarCustoBeneficio(Lado lado, List<Canhao> canhoes, DataReconciliation.ReconciliationResult[] resultados) {
-        // Lógica de utilidade e balanceamento
+        if (canhoes == null || canhoes.isEmpty() || resultados == null || resultados.length == 0) {
+            return;
+        }
+
+        float energiaAtual = jogo.getEnergia(lado);
+        int nCanhoes = canhoes.size();
+        float[][] distancias = montarMatrizDistancias(canhoes, resultados);
+        if (distancias.length == 0 || distancias[0].length == 0) {
+            return;
+        }
+
+        double uAtual = DataReconciliation.calcularUtilidade(
+                distancias, nCanhoes,
+                Canhao.getLimiarPenalidade(), Canhao.getAlphaPenalidade(), BETA,
+                Canhao.getIntervaloDisparoBase());
+
+        Double uMais1 = null;
+        Double uMenos1 = null;
+
+        if (nCanhoes < MAX_CANHOES_POR_LADO && energiaAtual > ENERGIA_SEGURA_MINIMA) {
+            float[] posicaoHipotetica = estimarPosicaoAdicao(resultados, lado);
+            float[][] distanciasMais1 = adicionarCandidato(distancias, resultados, posicaoHipotetica[0], posicaoHipotetica[1]);
+            uMais1 = DataReconciliation.calcularUtilidade(
+                    distanciasMais1, nCanhoes + 1,
+                    Canhao.getLimiarPenalidade(), Canhao.getAlphaPenalidade(), BETA,
+                    Canhao.getIntervaloDisparoBase());
+
+            double sobrevidaSegundos = energiaAtual / Math.max(1.0, (nCanhoes + 1) * 1.0);
+            if ((uMais1 - uAtual) > LIMIAR_GANHO && sobrevidaSegundos >= LIMIAR_SOBREVIDA_SEGUNDOS) {
+                OnReconciliacaoListener l = getListener();
+                if (l != null) {
+                    ReconciliationLog.getInstance().logAIDecision(
+                            "ADICIONAR",
+                            String.format(Locale.US, "DeltaU=%.4f sobrevida=%.1fs", (uMais1 - uAtual), sobrevidaSegundos),
+                            posicaoHipotetica[0], posicaoHipotetica[1], uAtual, uMais1);
+                    l.onSugestaoAdicionarCanhao(lado, posicaoHipotetica[0], posicaoHipotetica[1]);
+                }
+            }
+        }
+
+        if (nCanhoes > 1) {
+            int indiceRemocao = selecionarCanhaoMenorContribuicao(distancias);
+            if (indiceRemocao >= 0) {
+                float[][] distanciasMenos1 = removerCanhaoDaMatriz(distancias, indiceRemocao);
+                uMenos1 = DataReconciliation.calcularUtilidade(
+                        distanciasMenos1, nCanhoes - 1,
+                        Canhao.getLimiarPenalidade(), Canhao.getAlphaPenalidade(), BETA,
+                        Canhao.getIntervaloDisparoBase());
+
+                if ((uMenos1 - uAtual) > LIMIAR_GANHO || energiaAtual <= ENERGIA_CRITICA) {
+                    Canhao canhaoRemover = canhoes.get(indiceRemocao);
+                    OnReconciliacaoListener l = getListener();
+                    if (l != null) {
+                        ReconciliationLog.getInstance().logAIDecision(
+                                "REMOVER",
+                                String.format(Locale.US, "DeltaU=%.4f energia=%.1f", (uMenos1 - uAtual), energiaAtual),
+                                canhaoRemover.getX(), canhaoRemover.getY(), uAtual, uMenos1);
+                        l.onSugestaoRemoverCanhao(lado, canhaoRemover);
+                    }
+                }
+            }
+        }
+
+        ReconciliationLog.getInstance().logUtilityComparison(
+                lado.name(), nCanhoes, uAtual, uMais1, uMenos1, LIMIAR_GANHO, energiaAtual);
+    }
+
+    private float[][] montarMatrizDistancias(List<Canhao> canhoes, DataReconciliation.ReconciliationResult[] resultados) {
+        float[][] distancias = new float[resultados.length][canhoes.size()];
+        for (int i = 0; i < resultados.length; i++) {
+            DataReconciliation.ReconciliationResult r = resultados[i];
+            if (r == null || r.distanciasReconciliadas == null) {
+                continue;
+            }
+            int limite = Math.min(canhoes.size(), r.distanciasReconciliadas.length);
+            for (int j = 0; j < limite; j++) {
+                distancias[i][j] = r.distanciasReconciliadas[j];
+            }
+        }
+        return distancias;
+    }
+
+    private float[] estimarPosicaoAdicao(DataReconciliation.ReconciliationResult[] resultados, Lado lado) {
+        double somaPesos = 0.0;
+        double somaX = 0.0;
+        double somaY = 0.0;
+
+        for (DataReconciliation.ReconciliationResult resultado : resultados) {
+            if (resultado == null || resultado.distanciasReconciliadas == null || resultado.distanciasReconciliadas.length == 0) {
+                continue;
+            }
+            double mediaDist = 0.0;
+            for (float dist : resultado.distanciasReconciliadas) {
+                mediaDist += dist;
+            }
+            mediaDist /= resultado.distanciasReconciliadas.length;
+            double peso = Math.max(1.0, mediaDist);
+            somaPesos += peso;
+            somaX += resultado.x * peso;
+            somaY += resultado.y * peso;
+        }
+
+        if (somaPesos <= 0.0) {
+            return clampParaLado(lado, larguraTela * 0.5f, alturaTela * 0.5f);
+        }
+
+        return clampParaLado(lado, (float) (somaX / somaPesos), (float) (somaY / somaPesos));
+    }
+
+    private int selecionarCanhaoMenorContribuicao(float[][] distancias) {
+        if (distancias.length == 0 || distancias[0].length == 0) {
+            return -1;
+        }
+
+        int indiceMenor = -1;
+        double menorContribuicao = Double.POSITIVE_INFINITY;
+
+        for (int j = 0; j < distancias[0].length; j++) {
+            double contribuicao = 0.0;
+            for (float[] distancia : distancias) {
+                if (j < distancia.length) {
+                    contribuicao += Math.exp(-BETA * distancia[j]);
+                }
+            }
+            if (contribuicao < menorContribuicao) {
+                menorContribuicao = contribuicao;
+                indiceMenor = j;
+            }
+        }
+
+        return indiceMenor;
+    }
+
+    private float[][] adicionarCandidato(float[][] distancias, DataReconciliation.ReconciliationResult[] resultados,
+                                         float candidatoX, float candidatoY) {
+        float[][] expandida = new float[resultados.length][distancias[0].length + 1];
+        for (int i = 0; i < resultados.length; i++) {
+            for (int j = 0; j < distancias[i].length; j++) {
+                expandida[i][j] = distancias[i][j];
+            }
+            DataReconciliation.ReconciliationResult resultado = resultados[i];
+            if (resultado != null) {
+                expandida[i][distancias[0].length] = Alvo.calcularDistancia(candidatoX, candidatoY, resultado.x, resultado.y);
+            }
+        }
+        return expandida;
+    }
+
+    private float[][] removerCanhaoDaMatriz(float[][] distancias, int indiceRemocao) {
+        if (indiceRemocao < 0 || distancias.length == 0 || indiceRemocao >= distancias[0].length) {
+            return distancias;
+        }
+
+        float[][] reduzida = new float[distancias.length][distancias[0].length - 1];
+        for (int i = 0; i < distancias.length; i++) {
+            int destino = 0;
+            for (int j = 0; j < distancias[i].length; j++) {
+                if (j == indiceRemocao) {
+                    continue;
+                }
+                reduzida[i][destino++] = distancias[i][j];
+            }
+        }
+        return reduzida;
     }
 
     private void realocarCanhoes(Lado lado, List<Canhao> canhoes, DataReconciliation.ReconciliationResult[] resultados) {

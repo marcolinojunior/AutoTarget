@@ -68,7 +68,7 @@ public class SensorThread extends Thread {
     private volatile float[] verdadeiroPosX;
     private volatile float[] verdadeiroPosY;
     private volatile int quantidadeAlvosColetados;
-    private static final int TAMANHO_HISTORICO = 5; // Reduzido de 10 para 5 para maior frequência
+    private static final int TAMANHO_HISTORICO = 10; // Não pode ser reduzido de 10 pois é exigência do trabalho
 
     /** Flag de controle. */
     private volatile boolean ativo;
@@ -96,6 +96,7 @@ public class SensorThread extends Thread {
         float[] verdadeiroPosX = new float[0];
         float[] verdadeiroPosY = new float[0];
         int quantidadeAlvosColetados = 0;
+        final LinkedList<float[][]> historicoDistancias = new LinkedList<>();
         
         /** Histórico persistente por alvo para evitar corrupção por troca de índices. */
         final java.util.Map<Long, TargetHistory> historicoPorAlvo = new java.util.HashMap<>();
@@ -299,6 +300,12 @@ public class SensorThread extends Thread {
         dado.verdadeiroPosX = snap.verdadeiroPosX;
         dado.verdadeiroPosY = snap.verdadeiroPosY;
         dado.quantidadeAlvosColetados = snap.alvosAtivos.size();
+        if (snap.snapshotDistancias != null) {
+            dado.historicoDistancias.addLast(clonarMatriz(snap.snapshotDistancias));
+            while (dado.historicoDistancias.size() > TAMANHO_HISTORICO) {
+                dado.historicoDistancias.removeFirst();
+            }
+        }
 
         long now = System.currentTimeMillis();
         
@@ -330,7 +337,7 @@ public class SensorThread extends Thread {
             }
             
             history.samples.addLast(s);
-            if (history.samples.size() > TAMANHO_HISTORICO * 2) {
+            while (history.samples.size() > TAMANHO_HISTORICO) {
                 history.samples.removeFirst();
             }
         }
@@ -377,13 +384,25 @@ public class SensorThread extends Thread {
         return out;
     }
 
+    private float[][] clonarMatriz(float[][] entrada) {
+        if (entrada == null) return null;
+        float[][] copia = new float[entrada.length][];
+        for (int i = 0; i < entrada.length; i++) {
+            copia[i] = entrada[i] == null ? null : entrada[i].clone();
+        }
+        return copia;
+    }
+
     private void registrarEstatisticasSensor(Lado lado, SideSnapshot snap) {
         if (snap == null) return;
+        int historico = getHistoricoCount(lado);
+        if (historico < TAMANHO_HISTORICO) {
+            return;
+        }
         double mediaX = media(snap.leiturasPosX);
         double varX = varianciaAmostral(snap.leiturasPosX, mediaX);
         double mediaV = media(snap.leiturasVelocidade);
         double varV = varianciaAmostral(snap.leiturasVelocidade, mediaV);
-        int historico = getHistoricoCount(lado);
         ReconciliationLog.getInstance().logSensorStats(
                 lado.name(), snap.alvosAtivos.size(), historico, mediaX, varX, mediaV, varV);
         
@@ -430,7 +449,13 @@ public class SensorThread extends Thread {
     public float[][] getMediaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            if (dado == null || dado.historicoPorAlvo.isEmpty()) return null;
+            if (dado == null) return null;
+
+            if (!dado.historicoDistancias.isEmpty() && dado.historicoPorAlvo.isEmpty()) {
+                return calcularMediaHistoricoLegado(dado.historicoDistancias);
+            }
+
+            if (dado.historicoPorAlvo.isEmpty()) return null;
 
             // Filtrar apenas alvos que possuem o histórico mínimo exigido
             List<Long> idsValidos = new ArrayList<>();
@@ -478,6 +503,9 @@ public class SensorThread extends Thread {
     public float[][] getVarianciaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
+            if (dado != null && !dado.historicoDistancias.isEmpty() && dado.historicoPorAlvo.isEmpty()) {
+                return calcularVarianciaHistoricoLegado(dado.historicoDistancias);
+            }
             float[][] media = getMediaDistancias(lado);
             if (dado == null || media == null) return null;
 
@@ -523,6 +551,10 @@ public class SensorThread extends Thread {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
             if (dado == null) return 0;
+
+            if (dado.historicoPorAlvo.isEmpty()) {
+                return dado.historicoDistancias.size();
+            }
             
             // Retornar o maior histórico disponível entre os alvos ativos
             int max = 0;
@@ -535,6 +567,55 @@ public class SensorThread extends Thread {
 
     public static int getHistoricoMinimoReconciliacao() {
         return TAMANHO_HISTORICO;
+    }
+
+    private float[][] calcularMediaHistoricoLegado(LinkedList<float[][]> historico) {
+        if (historico.isEmpty()) return null;
+        float[][] primeira = historico.getFirst();
+        if (primeira == null || primeira.length == 0) return null;
+        int M = primeira.length;
+        int N = primeira[0].length;
+        float[][] media = new float[M][N];
+        for (float[][] amostra : historico) {
+            if (amostra == null || amostra.length != M) continue;
+            for (int i = 0; i < M; i++) {
+                if (amostra[i] == null || amostra[i].length != N) continue;
+                for (int j = 0; j < N; j++) {
+                    media[i][j] += amostra[i][j];
+                }
+            }
+        }
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < N; j++) {
+                media[i][j] /= historico.size();
+            }
+        }
+        return media;
+    }
+
+    private float[][] calcularVarianciaHistoricoLegado(LinkedList<float[][]> historico) {
+        float[][] media = calcularMediaHistoricoLegado(historico);
+        if (media == null) return null;
+        int M = media.length;
+        int N = media[0].length;
+        float[][] variancia = new float[M][N];
+        for (float[][] amostra : historico) {
+            if (amostra == null || amostra.length != M) continue;
+            for (int i = 0; i < M; i++) {
+                if (amostra[i] == null || amostra[i].length != N) continue;
+                for (int j = 0; j < N; j++) {
+                    float diff = amostra[i][j] - media[i][j];
+                    variancia[i][j] += diff * diff;
+                }
+            }
+        }
+        float divisor = Math.max(1, historico.size() - 1);
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < N; j++) {
+                variancia[i][j] = Math.max(variancia[i][j] / divisor, 0.01f);
+            }
+        }
+        return variancia;
     }
 
     public float[] getVerdadeiroPosX() {

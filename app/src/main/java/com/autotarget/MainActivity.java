@@ -72,6 +72,7 @@ import com.autotarget.ui.LoginActivity;
 import com.autotarget.ui.RankingActivity;
 import com.autotarget.ui.ReconciliationReportActivity;
 import com.autotarget.ui.TrlActivity;
+import com.autotarget.util.ThreadAffinityHelper;
 import com.google.firebase.auth.FirebaseAuth;
 
 /**
@@ -289,6 +290,9 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
         } else if (id == R.id.action_benchmark) {
             startActivity(new Intent(this, BenchmarkActivity.class));
             return true;
+        } else if (id == R.id.action_affinity) {
+            mostrarDialogoAfinidade();
+            return true;
         } else if (id == R.id.action_logout) {
             FirebaseAuth.getInstance().signOut();
             startActivity(new Intent(this, LoginActivity.class));
@@ -296,5 +300,33 @@ public class MainActivity extends AppCompatActivity implements Jogo.OnJogoListen
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    private void mostrarDialogoAfinidade() {
+        final String[] labels = {"1 núcleo", "2 núcleos", "Todos os núcleos"};
+        final ThreadAffinityHelper.AffinityMode[] values = {
+                ThreadAffinityHelper.AffinityMode.ONE_CORE,
+                ThreadAffinityHelper.AffinityMode.TWO_CORES,
+                ThreadAffinityHelper.AffinityMode.ALL_CORES
+        };
+
+        int checked = 2;
+        ThreadAffinityHelper.AffinityMode atual = ThreadAffinityHelper.getAffinityMode();
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == atual) {
+                checked = i;
+                break;
+            }
+        }
+
+        new AlertDialog.Builder(this, R.style.Theme_AutoTarget)
+                .setTitle("Afinidade de CPU")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    ThreadAffinityHelper.setAffinityMode(values[which]);
+                })
+                .setPositiveButton("Aplicar", (dialog, which) ->
+                        Toast.makeText(this, "Modo de afinidade atualizado", Toast.LENGTH_SHORT).show())
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 }

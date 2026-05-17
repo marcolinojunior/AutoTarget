@@ -21,6 +21,7 @@ import com.autotarget.R;
 import com.autotarget.util.ReconciliationLog;
 import com.github.mikephil.charting.charts.BarChart;
 import com.github.mikephil.charting.charts.LineChart;
+import com.github.mikephil.charting.components.LimitLine;
 import com.github.mikephil.charting.components.XAxis;
 import com.github.mikephil.charting.data.BarData;
 import com.github.mikephil.charting.data.BarDataSet;
@@ -59,6 +60,9 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         Button btnCopyLogs = findViewById(R.id.btnCopyLogs);
         LineChart lineChartEnergy = findViewById(R.id.lineChartEnergy);
         BarChart barChartRecon = findViewById(R.id.barChartRecon);
+        LineChart lineChartUtility = findViewById(R.id.lineChartUtility);
+        LineChart lineChartConditioning = findViewById(R.id.lineChartConditioning);
+        LineChart lineChartStarvation = findViewById(R.id.lineChartStarvation);
 
         String finalReport = report;
         btnCopyLogs.setOnClickListener(v -> {
@@ -67,6 +71,15 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             clipboard.setPrimaryClip(clip);
             Toast.makeText(this, "Logs copiados para a área de transferência!", Toast.LENGTH_SHORT).show();
         });
+
+        TextView tvResumoAdaptativo = new TextView(this);
+        tvResumoAdaptativo.setTextSize(14f);
+        tvResumoAdaptativo.setLineSpacing(8f, 1.05f);
+        tvResumoAdaptativo.setTextColor(Color.WHITE);
+        tvResumoAdaptativo.setPadding(20, 20, 20, 20);
+        tvResumoAdaptativo.setBackgroundColor(Color.parseColor("#1F2A44"));
+        tvResumoAdaptativo.setText(buildAdaptiveSummary());
+        layoutReportText.addView(tvResumoAdaptativo, 0);
 
         // Splitting report by sections for better UI visualization
         String[] sections = report.split("\n(?=METRICAS|RELATORIO|\\[EVIDENCIA)");
@@ -112,6 +125,9 @@ public class ReconciliationReportActivity extends AppCompatActivity {
 
         setupEnergyChart(lineChartEnergy);
         setupReconChart(barChartRecon);
+        setupUtilityChart(lineChartUtility);
+        setupConditioningChart(lineChartConditioning);
+        setupStarvationChart(lineChartStarvation);
     }
 
     private void setupEnergyChart(LineChart chart) {
@@ -153,6 +169,264 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         chart.getLegend().setTextColor(Color.WHITE);
         chart.getDescription().setEnabled(false);
         chart.invalidate();
+    }
+
+    private void setupUtilityChart(LineChart chart) {
+        List<ReconciliationLog.UtilitySample> samples = ReconciliationLog.getInstance().getUtilitySamples();
+        if (samples.isEmpty()) {
+            chart.setNoDataText("Nenhum dado de utilidade registrado.");
+            chart.setNoDataTextColor(Color.WHITE);
+            return;
+        }
+
+        List<Entry> entriesAtual = new ArrayList<>();
+        List<Entry> entriesMais1 = new ArrayList<>();
+        List<Entry> entriesMenos1 = new ArrayList<>();
+
+        for (int i = 0; i < samples.size(); i++) {
+            ReconciliationLog.UtilitySample s = samples.get(i);
+            entriesAtual.add(new Entry(i, (float) s.uAtual));
+            if (s.uMais1 != null) {
+                entriesMais1.add(new Entry(i, s.uMais1.floatValue()));
+            }
+            if (s.uMenos1 != null) {
+                entriesMenos1.add(new Entry(i, s.uMenos1.floatValue()));
+            }
+        }
+
+        LineDataSet setAtual = new LineDataSet(entriesAtual, "U(N)");
+        setAtual.setColor(Color.parseColor("#00B4D8"));
+        setAtual.setCircleColor(Color.parseColor("#00B4D8"));
+        setAtual.setLineWidth(2f);
+        setAtual.setValueTextColor(Color.WHITE);
+
+        LineDataSet setMais1 = new LineDataSet(entriesMais1, "U(N+1)");
+        setMais1.setColor(Color.parseColor("#4CAF50"));
+        setMais1.setCircleColor(Color.parseColor("#4CAF50"));
+        setMais1.setLineWidth(2f);
+        setMais1.setValueTextColor(Color.WHITE);
+
+        LineDataSet setMenos1 = new LineDataSet(entriesMenos1, "U(N-1)");
+        setMenos1.setColor(Color.parseColor("#FF9800"));
+        setMenos1.setCircleColor(Color.parseColor("#FF9800"));
+        setMenos1.setLineWidth(2f);
+        setMenos1.setValueTextColor(Color.WHITE);
+
+        chart.setData(new LineData(setAtual, setMais1, setMenos1));
+        chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        chart.getXAxis().setTextColor(Color.WHITE);
+        chart.getAxisLeft().setTextColor(Color.WHITE);
+        chart.getAxisRight().setEnabled(false);
+        chart.getLegend().setTextColor(Color.WHITE);
+        chart.getDescription().setEnabled(false);
+        chart.invalidate();
+    }
+
+    private void setupConditioningChart(LineChart chart) {
+        List<ReconciliationLog.ConditioningSample> samples = ReconciliationLog.getInstance().getConditioningSamples();
+        if (samples.isEmpty()) {
+            chart.setNoDataText("Nenhum dado de condicionamento registrado.");
+            chart.setNoDataTextColor(Color.WHITE);
+            return;
+        }
+
+        List<Entry> entriesCond = new ArrayList<>();
+        List<Entry> entriesFallback = new ArrayList<>();
+
+        for (int i = 0; i < samples.size(); i++) {
+            ReconciliationLog.ConditioningSample s = samples.get(i);
+            double cond = Math.max(s.conditionNumber, 1.0);
+            entriesCond.add(new Entry(i, (float) Math.log10(cond)));
+            entriesFallback.add(new Entry(i, s.usouFallback ? 1f : 0f));
+        }
+
+        LineDataSet setCond = new LineDataSet(entriesCond, "log10(cond)");
+        setCond.setColor(Color.parseColor("#E94560"));
+        setCond.setCircleColor(Color.parseColor("#E94560"));
+        setCond.setLineWidth(2f);
+        setCond.setValueTextColor(Color.WHITE);
+
+        LineDataSet setFallback = new LineDataSet(entriesFallback, "Fallback");
+        setFallback.setColor(Color.parseColor("#FFD166"));
+        setFallback.setCircleColor(Color.parseColor("#FFD166"));
+        setFallback.setLineWidth(1.5f);
+        setFallback.setValueTextColor(Color.WHITE);
+
+        chart.setData(new LineData(setCond, setFallback));
+        chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        chart.getXAxis().setTextColor(Color.WHITE);
+        chart.getAxisLeft().setTextColor(Color.WHITE);
+        chart.getAxisRight().setEnabled(false);
+        chart.getLegend().setTextColor(Color.WHITE);
+        chart.getDescription().setEnabled(false);
+        chart.invalidate();
+    }
+
+    private void setupStarvationChart(LineChart chart) {
+        List<ReconciliationLog.StarvationSample> samples = ReconciliationLog.getInstance().getStarvationSamples();
+        if (samples.isEmpty()) {
+            chart.setNoDataText("Nenhum dado de starvation registrado.");
+            chart.setNoDataTextColor(Color.WHITE);
+            return;
+        }
+
+        List<Entry> entriesEsq = new ArrayList<>();
+        List<Entry> entriesDir = new ArrayList<>();
+        List<Entry> entriesLimite = new ArrayList<>();
+
+        for (int i = 0; i < samples.size(); i++) {
+            ReconciliationLog.StarvationSample sample = samples.get(i);
+            entriesEsq.add(new Entry(i, sample.historicoEsq));
+            entriesDir.add(new Entry(i, sample.historicoDir));
+            entriesLimite.add(new Entry(i, 10f));
+        }
+
+        LineDataSet setEsq = new LineDataSet(entriesEsq, "Histórico Esq");
+        setEsq.setColor(Color.parseColor("#00B4D8"));
+        setEsq.setCircleColor(Color.parseColor("#00B4D8"));
+        setEsq.setLineWidth(2f);
+        setEsq.setValueTextColor(Color.WHITE);
+
+        LineDataSet setDir = new LineDataSet(entriesDir, "Histórico Dir");
+        setDir.setColor(Color.parseColor("#E94560"));
+        setDir.setCircleColor(Color.parseColor("#E94560"));
+        setDir.setLineWidth(2f);
+        setDir.setValueTextColor(Color.WHITE);
+
+        LineDataSet setLimite = new LineDataSet(entriesLimite, "Limiar 10");
+        setLimite.setColor(Color.parseColor("#FF5252"));
+        setLimite.setCircleColor(Color.parseColor("#FF5252"));
+        setLimite.setDrawCircles(false);
+        setLimite.enableDashedLine(12f, 8f, 0f);
+        setLimite.setLineWidth(1.5f);
+        setLimite.setValueTextColor(Color.WHITE);
+
+        chart.setData(new LineData(setEsq, setDir, setLimite));
+        chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        chart.getXAxis().setTextColor(Color.WHITE);
+        chart.getAxisLeft().setTextColor(Color.WHITE);
+        chart.getAxisRight().setEnabled(false);
+        chart.getLegend().setTextColor(Color.WHITE);
+        chart.getDescription().setEnabled(false);
+
+        LimitLine limitLine = new LimitLine(10f, "Y=10");
+        limitLine.setLineColor(Color.parseColor("#FF5252"));
+        limitLine.setTextColor(Color.parseColor("#FF5252"));
+        limitLine.setTextSize(10f);
+        chart.getAxisLeft().removeAllLimitLines();
+        chart.getAxisLeft().addLimitLine(limitLine);
+        chart.invalidate();
+    }
+
+    private String buildAdaptiveSummary() {
+        List<ReconciliationLog.EnergyPenaltySample> energySamples = ReconciliationLog.getInstance().getEnergySamples();
+        List<ReconciliationLog.ReconSample> reconSamples = ReconciliationLog.getInstance().getReconSamples();
+        List<ReconciliationLog.UtilitySample> utilitySamples = ReconciliationLog.getInstance().getUtilitySamples();
+        List<ReconciliationLog.ConditioningSample> conditioningSamples = ReconciliationLog.getInstance().getConditioningSamples();
+
+        if (energySamples.isEmpty() && reconSamples.isEmpty() && utilitySamples.isEmpty() && conditioningSamples.isEmpty()) {
+            return "Leitura automática: sem dados suficientes para inferir uma estratégia.\n" +
+                    "Ação sugerida: execute uma partida completa para gerar energia, reconciliação e utilidade.";
+        }
+
+        float energiaInicial = energySamples.isEmpty() ? 0f : energySamples.get(0).energiaEsq + energySamples.get(0).energiaDir;
+        ReconciliationLog.EnergyPenaltySample ultimoEnergy = energySamples.isEmpty() ? null : energySamples.get(energySamples.size() - 1);
+        float energiaFinal = ultimoEnergy == null ? energiaInicial : ultimoEnergy.energiaEsq + ultimoEnergy.energiaDir;
+        double taxaQuedaEnergia = energySamples.size() > 1
+                ? (energiaInicial - energiaFinal) / Math.max(1, energySamples.size() - 1)
+                : 0.0;
+
+        double mediaReducaoRecon = 0.0;
+        double mediaErroPos = 0.0;
+        if (!reconSamples.isEmpty()) {
+            for (ReconciliationLog.ReconSample sample : reconSamples) {
+                double reducao = sample.mseBruto > 0 ? ((sample.mseBruto - sample.mseRecon) / sample.mseBruto) * 100.0 : 0.0;
+                mediaReducaoRecon += reducao;
+                mediaErroPos += sample.erroPos;
+            }
+            mediaReducaoRecon /= reconSamples.size();
+            mediaErroPos /= reconSamples.size();
+        }
+
+        double mediaDeltaMais1 = 0.0;
+        double mediaDeltaMenos1 = 0.0;
+        int utilMais1 = 0;
+        int utilMenos1 = 0;
+        for (ReconciliationLog.UtilitySample sample : utilitySamples) {
+            if (sample.uMais1 != null) {
+                mediaDeltaMais1 += (sample.uMais1 - sample.uAtual);
+                utilMais1++;
+            }
+            if (sample.uMenos1 != null) {
+                mediaDeltaMenos1 += (sample.uMenos1 - sample.uAtual);
+                utilMenos1++;
+            }
+        }
+        if (utilMais1 > 0) mediaDeltaMais1 /= utilMais1;
+        if (utilMenos1 > 0) mediaDeltaMenos1 /= utilMenos1;
+
+        int condicionamentosAltos = 0;
+        int fallbacks = 0;
+        for (ReconciliationLog.ConditioningSample sample : conditioningSamples) {
+            if (!Double.isFinite(sample.conditionNumber) || sample.conditionNumber > 1.0e12) {
+                condicionamentosAltos++;
+            }
+            if (sample.usouFallback) {
+                fallbacks++;
+            }
+        }
+
+        String verdict;
+        String acao;
+        String motivo;
+
+        boolean energiaApertada = energiaFinal < Math.max(20f, energiaInicial * 0.25f) || taxaQuedaEnergia > 2.0;
+        boolean reconEficiente = mediaReducaoRecon > 15.0 && mediaErroPos < 35.0;
+        boolean geometriaInstavel = condicionamentosAltos > 0 || fallbacks > 0;
+        boolean adicionarCompensa = mediaDeltaMais1 > 0.01 && !energiaApertada && !geometriaInstavel;
+        boolean removerCompensa = mediaDeltaMenos1 > 0.01 || energiaApertada;
+
+        if (adicionarCompensa && !removerCompensa) {
+            verdict = "Diagnóstico: o sistema está em zona de expansão controlada.";
+            acao = "Próxima ação: considerar adicionar canhões nos clusters com maior ganho marginal.";
+            motivo = String.format(java.util.Locale.US,
+                    "Utilidade média favorece U(N+1) em %.3f, com energia ainda folgada e condicionamento estável.",
+                    mediaDeltaMais1);
+        } else if (removerCompensa) {
+            verdict = "Diagnóstico: o sistema está operando perto do limite energético.";
+            acao = "Próxima ação: remover ou realocar canhões de menor contribuição antes que o desempenho caia.";
+            motivo = String.format(java.util.Locale.US,
+                    "U(N-1) ficou melhor em %.3f e a energia final caiu para %.1f.",
+                    mediaDeltaMenos1, energiaFinal);
+        } else {
+            verdict = "Diagnóstico: o sistema está em equilíbrio tático.";
+            acao = "Próxima ação: manter a frota atual e priorizar realocação fina.";
+            motivo = String.format(java.util.Locale.US,
+                    "Reconciliação média de %.1f%% e utilidade marginal próxima do limiar indicam estabilidade.",
+                    mediaReducaoRecon);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(verdict).append('\n');
+        sb.append(acao).append('\n');
+        sb.append(motivo).append('\n');
+        sb.append(String.format(java.util.Locale.US,
+                "Energia inicial/final: %.1f -> %.1f | Queda média: %.2f por amostra\n",
+                energiaInicial, energiaFinal, taxaQuedaEnergia));
+        sb.append(String.format(java.util.Locale.US,
+                "Reconciliação: redução média de MSE %.1f%% | erro posicional médio %.2f px\n",
+                mediaReducaoRecon, mediaErroPos));
+        sb.append(String.format(java.util.Locale.US,
+                "Utilidade: ΔU(N+1)=%.3f | ΔU(N-1)=%.3f | Fallbacks numéricos=%d\n",
+                mediaDeltaMais1, mediaDeltaMenos1, fallbacks));
+
+        if (geometriaInstavel) {
+            sb.append("Atenção: a geometria está numericamente sensível; redistribuir canhões ajuda a estabilizar a reconciliação.");
+        } else {
+            sb.append("A geometria está estável o suficiente para apoiar decisões táticas automáticas.");
+        }
+
+        return sb.toString();
     }
 
     private void setupReconChart(BarChart chart) {

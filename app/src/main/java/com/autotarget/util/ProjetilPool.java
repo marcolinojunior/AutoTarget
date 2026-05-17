@@ -22,8 +22,9 @@ public class ProjetilPool {
         Projetil p = pool.poll();
         if (p != null) {
             size.decrementAndGet();
+            return p;
         }
-        return p;
+        return new Projetil();
     }
 
     /**

@@ -5,10 +5,10 @@
  * ============================================================================
  *
  * DESCRIÇÃO TÉCNICA:
- *   Wrapper Java para o módulo JNI de afinidade de núcleo de CPU.
- *   Permite ancorar threads em núcleos específicos do SoC ARM,
- *   eliminando cache misses causados pela migração dinâmica de threads
- *   pelo kernel Linux do Android.
+ *   Wrapper Java para afinidade de CPU com seleção dinâmica de máscara.
+ *   O helper tenta aplicar Process.setThreadAffinityMask() via reflexão e,
+ *   se a API não existir, faz fallback para JNI. O comportamento pode ser
+ *   parametrizado em 1 núcleo, 2 núcleos ou todos os núcleos disponíveis.
  *
  * ESCALONAMENTO RMA:
  *   Usado para garantir que tarefas de alta prioridade (T1 PhysicsTimer,
@@ -27,14 +27,51 @@ import android.util.Log;
  */
 public class ThreadAffinityHelper {
 
+    public enum AffinityMode {
+        ONE_CORE,
+        TWO_CORES,
+        ALL_CORES
+    }
+
     private static final String TAG = "ThreadAffinity";
     private static boolean loaded = false;
+    private static volatile AffinityMode affinityMode = AffinityMode.ALL_CORES;
 
     /** Máscaras de afinidade para big.LITTLE ARM SoC */
     public static final int BIG_CORES = 0xF0;     // Cores 4-7 (alto desempenho)
     public static final int LITTLE_CORES = 0x0F;   // Cores 0-3 (eficiência)
     public static final int ALL_CORES = 0xFF;       // Todos os cores
     public static final int SINGLE_CORE = 0x01;     // Core 0 apenas
+
+    public static void setAffinityMode(AffinityMode mode) {
+        affinityMode = (mode == null) ? AffinityMode.ALL_CORES : mode;
+        Log.i(TAG, "Modo de afinidade atualizado para " + affinityMode);
+    }
+
+    public static AffinityMode getAffinityMode() {
+        return affinityMode;
+    }
+
+    private static int buildDynamicMask(int coresDesejados) {
+        int available = Math.max(1, Runtime.getRuntime().availableProcessors());
+        int effective = Math.max(1, Math.min(coresDesejados, available));
+        if (effective >= Integer.SIZE - 1) {
+            return -1;
+        }
+        return (1 << effective) - 1;
+    }
+
+    private static int resolveMaskForMode() {
+        switch (affinityMode) {
+            case ONE_CORE:
+                return buildDynamicMask(1);
+            case TWO_CORES:
+                return buildDynamicMask(2);
+            case ALL_CORES:
+            default:
+                return buildDynamicMask(Runtime.getRuntime().availableProcessors());
+        }
+    }
 
     static {
         try {
@@ -98,7 +135,7 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForCriticalTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, BIG_CORES);
+        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
     }
 
     /**
@@ -106,7 +143,7 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForMediumTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, BIG_CORES);
+        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
     }
 
     /**
@@ -114,6 +151,6 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForBackgroundTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, LITTLE_CORES);
+        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
     }
 }

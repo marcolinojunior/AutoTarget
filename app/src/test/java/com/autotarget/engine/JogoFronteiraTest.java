@@ -82,4 +82,38 @@ public class JogoFronteiraTest {
         
         assertFalse("Um projétil não deve abater alvos que já cruzaram a fronteira.", abateEfetivado);
     }
+
+            @Test
+            public void testCentroExatoPertenceAoLadoDireito() {
+                int LARGURA = 1200;
+                int ALTURA = 800;
+                GameGeometry geom = GameGeometry.forScreen(LARGURA, ALTURA);
+
+                assertEquals("O ponto exatamente no meio deve pertencer ao lado direito",
+                        Lado.DIREITO, geom.determineLado(geom.getMidpointX()));
+                assertEquals("Um pixel à esquerda do centro deve pertencer ao lado esquerdo",
+                        Lado.ESQUERDO, geom.determineLado(geom.getMidpointX() - 1f));
+            }
+
+            @Test
+            public void testTransferenciaNaFronteiraMantemConsistenciaAtomica() throws Exception {
+                final int LARGURA = 1200;
+                final int ALTURA = 800;
+                Jogo jogo = new Jogo();
+                jogo.setDimensoesTela(LARGURA, ALTURA);
+
+                float meio = LARGURA / 2f;
+                Alvo alvo = new AlvoComum(meio - 2f, 200f, 20f, 0f, LARGURA, ALTURA);
+                jogo.getAlvosEsquerdo().add(alvo);
+
+                // Empurra o alvo para a fronteira exata; a regra deve levá-lo ao lado direito.
+                alvo.setPosicaoX(meio);
+
+                java.lang.reflect.Method transferir = Jogo.class.getDeclaredMethod("transferirAlvosCruzados");
+                transferir.setAccessible(true);
+                transferir.invoke(jogo);
+
+                assertFalse("O alvo deve sair da lista esquerda após cruzar a fronteira", jogo.getAlvosEsquerdo().contains(alvo));
+                assertTrue("O alvo deve aparecer na lista direita após cruzar a fronteira", jogo.getAlvosDireito().contains(alvo));
+            }
 }

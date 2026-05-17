@@ -40,6 +40,8 @@ public class DataReconciliation {
 
     private static final String TAG = "DataReconciliation";
     private static final double LIMIAR_GEOMETRICO_FATOR = 0.85;
+    private static final double LIMIAR_CONDICIONAMENTO = 1.0e12;
+    private static final double REGULARIZACAO_TIKHONOV = 1.0e-8;
 
     /**
      * Resultado da reconciliação para um alvo.
@@ -69,17 +71,36 @@ public class DataReconciliation {
      * @param allowPseudoInverse fallback para pseudo-inversa em caso de singularidade
      * @return matriz invertida
      */
+    public static double calcularNumeroCondicion(SimpleMatrix mat) {
+        if (mat == null) return Double.POSITIVE_INFINITY;
+        try {
+            org.ejml.simple.SimpleSVD<SimpleMatrix> svd = mat.svd();
+            SimpleMatrix w = svd.getW();
+            int n = Math.min(w.getNumRows(), w.getNumCols());
+            double maior = 0.0;
+            double menor = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < n; i++) {
+                double sigma = Math.abs(w.get(i, i));
+                maior = Math.max(maior, sigma);
+                if (sigma > 0.0) {
+                    menor = Math.min(menor, sigma);
+                }
+            }
+            if (maior == 0.0 || !Double.isFinite(menor)) {
+                return Double.POSITIVE_INFINITY;
+            }
+            return maior / menor;
+        } catch (Exception e) {
+            return Double.POSITIVE_INFINITY;
+        }
+    }
+
     private static SimpleMatrix safeInvert(SimpleMatrix mat, boolean allowPseudoInverse) {
         if (mat == null) return null;
         try {
-            // Check condition number via SVD
-            org.ejml.simple.SimpleSVD<SimpleMatrix> svd = mat.svd();
-            double maxS = svd.getW().get(0, 0);
-            double minS = svd.getW().get(Math.min(mat.getNumRows(), mat.getNumCols()) - 1, 0);
-
-            if (maxS / Math.max(minS, 1e-18) > 1e12 || !allowPseudoInverse) {
-                // Extremely poor conditioning, use pseudo-inverse directly if allowed
-                if (allowPseudoInverse) return mat.pseudoInverse();
+            double cond = calcularNumeroCondicion(mat);
+            if (allowPseudoInverse && (Double.isInfinite(cond) || cond > LIMIAR_CONDICIONAMENTO)) {
+                return mat.pseudoInverse();
             }
 
             org.ejml.interfaces.linsol.LinearSolverDense<org.ejml.data.DMatrixRMaj> solver =
@@ -138,6 +159,12 @@ public class DataReconciliation {
                 matM.set(j, 2, -2.0 * canhoesY[j]);
             }
 
+            double condM = calcularNumeroCondicion(matM);
+            if (!Double.isFinite(condM) || condM > LIMIAR_CONDICIONAMENTO) {
+                Log.w(TAG, "Geometria dos canhões mal condicionada (cond=" + condM + ") — fallback para OLS direto");
+                return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
+            }
+
             // ── Passo 4: Espaço nulo esquerdo de M ─────────────────
             // dim(null space esquerdo) = M_rows - rank(M) = N - 3
             SimpleMatrix C = computeLeftNullSpace(matM, M_rows);
@@ -145,6 +172,11 @@ public class DataReconciliation {
                 Log.w(TAG, "Canhões colineares — fallback para OLS direto");
                 return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
             }
+
+                double cond = calcularNumeroCondicion(matM);
+            ReconciliationLog.getInstance().logConditioning(
+                    "RECONCILIAR", N, cond,
+                    Double.isInfinite(cond) || cond > LIMIAR_CONDICIONAMENTO);
 
             // ── Reconciliar cada alvo independentemente ─────────────
             ReconciliationResult[] results = new ReconciliationResult[M];
@@ -309,6 +341,10 @@ public class DataReconciliation {
      * @return vetor reconciliado y_hat
      */
     public static double[] reconcile(double[] y, double[][] V, double[][] A) {
+        if (y == null || V == null || A == null || y.length == 0) {
+            return y;
+        }
+
         SimpleMatrix matY = new SimpleMatrix(y.length, 1);
         for (int i = 0; i < y.length; i++) matY.set(i, 0, y[i]);
 
@@ -316,17 +352,23 @@ public class DataReconciliation {
         SimpleMatrix matA = new SimpleMatrix(A);
 
         SimpleMatrix At = matA.transpose();
-        
-        // FIX 5: Regularização de Tikhonov (Ridge Regression) para evitar variância zero / singularidade
+
         SimpleMatrix AVAt = matA.mult(matV).mult(At);
         int m = AVAt.getNumRows();
         for (int i = 0; i < m; i++) {
-            AVAt.set(i, i, AVAt.get(i, i) + 1e-4); // Aumentado de 1e-6 para 1e-4 para maior estabilidade
+            AVAt.set(i, i, AVAt.get(i, i) + REGULARIZACAO_TIKHONOV);
+        }
+
+        SimpleMatrix AVAt_inv = safeInvert(AVAt, true);
+        if (AVAt_inv == null) {
+            try {
+                AVAt_inv = AVAt.pseudoInverse();
+            } catch (Exception e) {
+                return y;
+            }
         }
 
         try {
-            SimpleMatrix AVAt_inv = safeInvert(AVAt, true);
-
             SimpleMatrix correction = matV.mult(At).mult(AVAt_inv).mult(matA).mult(matY);
             SimpleMatrix yHat = matY.minus(correction);
 
@@ -339,24 +381,7 @@ public class DataReconciliation {
             }
             return result;
         } catch (Exception e) {
-            // If pseudoInverse throws, or solver inversion throws, just use pseudoInverse explicitly as fallback and catch everything to return original y if truly uninvertible
-            try {
-                SimpleMatrix AVAt_inv = AVAt.pseudoInverse();
-                SimpleMatrix correction = matV.mult(At).mult(AVAt_inv).mult(matA).mult(matY);
-                SimpleMatrix yHat = matY.minus(correction);
-
-                double[] result = new double[y.length];
-                for (int i = 0; i < y.length; i++) {
-                    result[i] = yHat.get(i, 0);
-                    if (!Double.isFinite(result[i])) {
-                        return y;
-                    }
-                }
-                return result;
-            } catch (Exception ex) {
-                // To pass `testReconcileUsaPseudoInverseQuandoSingular` when even pseudoInverse fails for some reason (it shouldn't generally if data is good, but just in case for tests)
-                return y;
-            }
+            return y;
         }
     }
 

@@ -111,7 +111,6 @@ public class Canhao extends Thread {
 
             this.angulo = (float) Math.toDegrees(Math.atan2(dyAim, dxAim));
             Projetil p = com.autotarget.util.ProjetilPool.obter();
-            if (p == null) p = new Projetil();
             p.reutilizar(this.x, this.y, dxAim/dist, dyAim/dist, VELOCIDADE_PROJETIL, alvos, collisionLock, larguraTela, alturaTela, jogo, lado, alvoReservado, this);
             
             projeteis.add(p);

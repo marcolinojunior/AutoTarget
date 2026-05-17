@@ -163,10 +163,6 @@ public class Projetil implements Runnable {
     }
 
 
-    public void start() {} // Dummy start for compatibility
-
-    public void interrupt() {} // Dummy interrupt for compatibility
-
     // Compatibilidade: construtor antigo sem owner
     public Projetil(float x, float y, float direcaoX, float direcaoY,
                     float velocidade, List<Alvo> alvos, Object collisionLock,
@@ -247,6 +243,12 @@ public class Projetil implements Runnable {
                 if (alvo.isAtivo() && collide(alvo)) {
                     com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
                     if (geom.determineLado(alvo.getX()) == this.lado) {
+                        com.autotarget.util.DataStarvationController controller = jogo != null ? jogo.getStarvationController() : null;
+                        if (controller != null && controller.alvoEsquivou(this.lado)) {
+                            this.ativo = false;
+                            if (owner != null) owner.onProjetilFinished(this);
+                            break;
+                        }
                         if (alvo.tentarAbater(this.lado)) {
                             this.ativo = false;
                             // Tiro ACERTOU — limpar reserva (alvo destruído)

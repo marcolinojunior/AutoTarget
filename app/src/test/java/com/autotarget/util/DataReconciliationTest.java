@@ -106,6 +106,19 @@ public class DataReconciliationTest {
     }
 
     @Test
+    public void testReconciliacao_ColinearMesmoY_FallbackEstavel() {
+        float[] cX = { 10f, 20f, 30f, 40f };
+        float[] cY = { 50f, 50f, 50f, 50f };
+        float tX = 25f, tY = 120f;
+
+        double reducao = executarSimulacao(cX, cY, tX, tY, 2.0f, true);
+
+        System.out.println(String.format(Locale.US, "T03-LOG: Redução MSE (Colinear Y): %.2f%%", reducao));
+        assertTrue("Reconciliação colinear deve continuar estável", Double.isFinite(reducao));
+        assertTrue("Reconciliação colinear não deve piorar drasticamente", reducao > -50.0);
+    }
+
+    @Test
     public void testReconciliacao_N3_Fallback() {
         // N=3: Reconciliação não é aplicada matematicamente (Null Space vazio)
         float[] cX = { 0f, 100f, 50f };

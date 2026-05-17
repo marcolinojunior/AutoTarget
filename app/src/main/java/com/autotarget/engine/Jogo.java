@@ -88,6 +88,7 @@ import com.autotarget.model.Projetil;
 import com.autotarget.network.FirestoreRepository;
 import com.autotarget.util.Cryptography;
 import com.autotarget.util.DataReconciliation;
+import com.autotarget.util.DataStarvationController;
 import com.autotarget.util.QuadTree;
 import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ReconciliationLog;
@@ -204,6 +205,7 @@ public class Jogo {
     // ── Threads da arquitetura ────────────────────────────────────
     private SensorThread sensorThread;
     private ReconciliacaoThread reconciliacaoThread;
+    private DataStarvationController starvationController;
     private FirebaseIOThread firebaseIOThread;
     private final Object sensorLock = new Object();
 
@@ -305,6 +307,9 @@ public class Jogo {
 
                 atualizarEnergia();
                 aplicarPenalidades();
+                if (starvationController != null) {
+                    starvationController.monitorarEAtuar();
+                }
                 registrarMetricasEnergiaPenalidade();
                 registrarMetricasEstruturadas();
                 logMemoria();
@@ -356,6 +361,7 @@ public class Jogo {
 
         // Thread Sensores/Coleta (com ref canhões para distâncias)
         sensorThread = new SensorThread(this, sensorLock, collisionLock);
+        starvationController = new DataStarvationController(sensorThread);
         sensorThread.start();
 
         // Thread Reconciliação+Otimização (com EJML)
@@ -380,8 +386,8 @@ public class Jogo {
                 }
             }
             @Override
-            public void onSugestaoRemoverCanhao(Lado lado) {
-                desativarUltimoCanhao(lado);
+            public void onSugestaoRemoverCanhao(Lado lado, Canhao canhao) {
+                removerCanhao(canhao);
             }
             @Override
             public void onRealocarCanhao(Canhao canhao, float novoX, float novoY) {
@@ -489,8 +495,20 @@ public class Jogo {
             }
         }
         // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
-        energyManagerEsquerdo.remove(canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
-        energyManagerDireito.remove(canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
+        // O débito precisa ocorrer por canhão ativo; um único remove() em lote pode falhar
+        // quando a energia restante é menor que o total pedido, deixando saldo artificial.
+        for (int i = 0; i < canhoesEsq; i++) {
+            if (!energyManagerEsquerdo.tryRemove(CUSTO_ENERGIA_POR_CANHAO)) {
+                energyManagerEsquerdo.set(0f);
+                break;
+            }
+        }
+        for (int i = 0; i < canhoesDir; i++) {
+            if (!energyManagerDireito.tryRemove(CUSTO_ENERGIA_POR_CANHAO)) {
+                energyManagerDireito.set(0f);
+                break;
+            }
+        }
 
         // Se energia de um lado acabou, desativar todos os canhões desse lado
         if (energyManagerEsquerdo.get() <= 0f && canhoesEsq > 0) {
@@ -1170,6 +1188,7 @@ public class Jogo {
     }
     public FirestoreRepository getFirestoreRepository() { return firestoreRepository; }
     public Cryptography getCryptography() { return cryptography; }
+    public DataStarvationController getStarvationController() { return starvationController; }
     public List<Canhao> getCanhoesEsquerdo() { return canhoesEsquerdo; }
     public List<Canhao> getCanhoesDireito() { return canhoesDireito; }
     public List<Alvo> getAlvosEsquerdo() { return alvosEsquerdo; }
