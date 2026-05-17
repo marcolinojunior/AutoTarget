@@ -164,11 +164,17 @@ public class SensorThread extends Thread {
             List<Alvo> alvosAtuais = jogo.getAllAlvos();
             List<Canhao> canhoesEsq = new ArrayList<>();
             List<Canhao> canhoesDir = new ArrayList<>();
-            for (Canhao c : jogo.getCanhoesEsquerdo()) {
-                if (c.isAtivo()) canhoesEsq.add(c);
-            }
-            for (Canhao c : jogo.getCanhoesDireito()) {
-                if (c.isAtivo()) canhoesDir.add(c);
+            synchronized(jogo.getCanhoesLock()) {
+                java.util.List<Canhao> listaEsq = jogo.getCanhoesEsquerdo();
+                for (int i = 0; i < listaEsq.size(); i++) {
+                    Canhao c = listaEsq.get(i);
+                    if (c.isAtivo()) canhoesEsq.add(c);
+                }
+                java.util.List<Canhao> listaDir = jogo.getCanhoesDireito();
+                for (int i = 0; i < listaDir.size(); i++) {
+                    Canhao c = listaDir.get(i);
+                    if (c.isAtivo()) canhoesDir.add(c);
+                }
             }
 
             int larguraTela = Math.max(jogo.getLarguraTela(), 1);

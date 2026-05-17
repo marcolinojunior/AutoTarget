@@ -152,9 +152,8 @@ public class Jogo {
     private final ArrayList<Alvo> alvosDireito;
     private final ArrayList<Canhao> canhoesEsquerdo;
     private final ArrayList<Canhao> canhoesDireito;
-    
+
     private final Object listLock = new Object();
-    private final Object canhoesLock = new Object();
 
     private final Object collisionLock = new Object();
 
@@ -327,20 +326,11 @@ public class Jogo {
 
                 if (estado == Estado.RODANDO) {
                     long startNs = System.nanoTime();
-                    
+
                     // Atualiza a física de movimentação dos canhões (Deslize a 60Hz)
-                    synchronized (canhoesLock) {
-                        for (int i = 0; i < canhoesEsquerdo.size(); i++) {
-                            Canhao c = canhoesEsquerdo.get(i);
-                            if (c.isAtivo() && c.isMovendo()) {
-                                c.atualizarMovimento();
-                            }
-                        }
-                        for (int i = 0; i < canhoesDireito.size(); i++) {
-                            Canhao c = canhoesDireito.get(i);
-                            if (c.isAtivo() && c.isMovendo()) {
-                                c.atualizarMovimento();
-                            }
+                    for (Canhao c : getAllCanhoes()) {
+                        if (c.isAtivo() && c.isMovendo()) {
+                            c.atualizarMovimento();
                         }
                     }
 
@@ -403,15 +393,8 @@ public class Jogo {
         RMAAnalysis.executarAnalise();
 
         // Iniciar threads dos canhões existentes
-        synchronized (canhoesLock) {
-            for (int i = 0; i < canhoesEsquerdo.size(); i++) {
-                Canhao c = canhoesEsquerdo.get(i);
-                if (!c.isAlive()) c.start();
-            }
-            for (int i = 0; i < canhoesDireito.size(); i++) {
-                Canhao c = canhoesDireito.get(i);
-                if (!c.isAlive()) c.start();
-            }
+        for (Canhao c : getAllCanhoes()) {
+            if (!c.isAlive()) c.start();
         }
 
         notificarEstado();
@@ -478,13 +461,11 @@ public class Jogo {
 
     private void atualizarEnergia() {
         int canhoesEsq = 0, canhoesDir = 0;
-        synchronized (canhoesLock) {
-            for (int i = 0; i < canhoesEsquerdo.size(); i++) {
-                if (canhoesEsquerdo.get(i).isAtivo()) canhoesEsq++;
-            }
-            for (int i = 0; i < canhoesDireito.size(); i++) {
-                if (canhoesDireito.get(i).isAtivo()) canhoesDir++;
-            }
+        for (Canhao c : canhoesEsquerdo) {
+            if (c.isAtivo()) canhoesEsq++;
+        }
+        for (Canhao c : canhoesDireito) {
+            if (c.isAtivo()) canhoesDir++;
         }
         // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
         energyManagerEsquerdo.remove(canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
@@ -518,31 +499,22 @@ public class Jogo {
         if (canhoes == null || canhoes.isEmpty()) return 0;
         double soma = 0;
         int ativos = 0;
-        synchronized (canhoesLock) {
-            for (int i = 0; i < canhoes.size(); i++) {
-                Canhao c = canhoes.get(i);
-                if (!c.isAtivo()) continue;
-                soma += c.getIntervaloDisparo();
-                ativos++;
-            }
+        for (Canhao c : canhoes) {
+            if (!c.isAtivo()) continue;
+            soma += c.getIntervaloDisparo();
+            ativos++;
         }
         return ativos == 0 ? 0 : (soma / ativos);
     }
 
     private void desativarUltimoCanhao(Lado lado) {
         List<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
-        Canhao cParaParar = null;
-        synchronized (canhoesLock) {
-            for (int i = lista.size() - 1; i >= 0; i--) {
-                Canhao c = lista.get(i);
-                if (c.isAtivo()) {
-                    cParaParar = c;
-                    break;
-                }
+        for (int i = lista.size() - 1; i >= 0; i--) {
+            Canhao c = lista.get(i);
+            if (c.isAtivo()) {
+                pararCanhaoComJoin(c, 300);
+                break;
             }
-        }
-        if (cParaParar != null) {
-            pararCanhaoComJoin(cParaParar, 300);
         }
     }
 
@@ -557,10 +529,8 @@ public class Jogo {
     public int contarCanhoesAtivos(Lado lado) {
         List<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
         int count = 0;
-        synchronized (canhoesLock) {
-            for (int i = 0; i < lista.size(); i++) {
-                if (lista.get(i).isAtivo()) count++;
-            }
+        for (Canhao c : lista) {
+            if (c.isAtivo()) count++;
         }
         return count;
     }
@@ -575,7 +545,7 @@ public class Jogo {
     public void removerCanhao(Canhao canhao) {
         if (canhao == null) return;
         pararCanhaoComJoin(canhao, 500);
-        synchronized (canhoesLock) {
+        synchronized (listLock) {
             if (canhao.getLado() == Lado.ESQUERDO) {
                 canhoesEsquerdo.remove(canhao);
             } else {
@@ -623,29 +593,26 @@ public class Jogo {
         // Limpar reservas de alvos já destruídos
         limparReservasInvalidas();
 
+        List<Alvo> listaAlvos =
+                (canhao.getLado() == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+
         Alvo melhor = null;
         float menorDist = Float.MAX_VALUE;
 
-        synchronized(listLock) {
-            List<Alvo> listaAlvos =
-                    (canhao.getLado() == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+        for (Alvo alvo : listaAlvos) {
+            if (!alvo.isAtivo()) continue;
 
-            for (int i = 0; i < listaAlvos.size(); i++) {
-                Alvo alvo = listaAlvos.get(i);
-                if (!alvo.isAtivo()) continue;
+            // Verificar se já está reservado por OUTRO canhão
+            Canhao dono = reservasAlvos.get(alvo);
+            if (dono != null && dono != canhao && dono.isAtivo()) {
+                continue; // Alvo já comprometido por outro canhão
+            }
 
-                // Verificar se já está reservado por OUTRO canhão
-                Canhao dono = reservasAlvos.get(alvo);
-                if (dono != null && dono != canhao && dono.isAtivo()) {
-                    continue; // Alvo já comprometido por outro canhão
-                }
-
-                float dist = Alvo.calcularDistancia(canhao.getX(), canhao.getY(),
-                        alvo.getX(), alvo.getY());
-                if (dist < menorDist) {
-                    menorDist = dist;
-                    melhor = alvo;
-                }
+            float dist = Alvo.calcularDistancia(canhao.getX(), canhao.getY(),
+                    alvo.getX(), alvo.getY());
+            if (dist < menorDist) {
+                menorDist = dist;
+                melhor = alvo;
             }
         }
 
@@ -690,18 +657,14 @@ public class Jogo {
      */
     private void aplicarPenalidades() {
         int contEsq = 0, contDir = 0;
-        synchronized (canhoesLock) {
-            for (int i = 0; i < canhoesEsquerdo.size(); i++) { if (canhoesEsquerdo.get(i).isAtivo()) contEsq++; }
-            for (int i = 0; i < canhoesDireito.size(); i++) { if (canhoesDireito.get(i).isAtivo()) contDir++; }
+        for (Canhao c : canhoesEsquerdo) { if (c.isAtivo()) contEsq++; }
+        for (Canhao c : canhoesDireito) { if (c.isAtivo()) contDir++; }
 
-            for (int i = 0; i < canhoesEsquerdo.size(); i++) {
-                Canhao c = canhoesEsquerdo.get(i);
-                if (c.isAtivo()) c.aplicarPenalidade(contEsq);
-            }
-            for (int i = 0; i < canhoesDireito.size(); i++) {
-                Canhao c = canhoesDireito.get(i);
-                if (c.isAtivo()) c.aplicarPenalidade(contDir);
-            }
+        for (Canhao c : canhoesEsquerdo) {
+            if (c.isAtivo()) c.aplicarPenalidade(contEsq);
+        }
+        for (Canhao c : canhoesDireito) {
+            if (c.isAtivo()) c.aplicarPenalidade(contDir);
         }
     }
 
@@ -721,7 +684,7 @@ public class Jogo {
         }
 
         List<Canhao> listaCanhoes = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
-        synchronized (canhoesLock) {
+        synchronized (listLock) {
             int countLado = listaCanhoes.size();
 
             if (countLado >= MAX_CANHOES_POR_LADO) {
@@ -768,12 +731,10 @@ public class Jogo {
 
             com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
             Lado lado = geom.determineLado(x);
-            synchronized(listLock) {
-                if (lado == Lado.ESQUERDO) {
-                    alvosEsquerdo.add(alvo);
-                } else {
-                    alvosDireito.add(alvo);
-                }
+            if (lado == Lado.ESQUERDO) {
+                alvosEsquerdo.add(alvo);
+            } else {
+                alvosDireito.add(alvo);
             }
 
             ReconciliationLog.getInstance().logSpawn(x, y,
@@ -786,7 +747,7 @@ public class Jogo {
     private void agendarProximoSpawn() {
         if (estado != Estado.RODANDO || executorService == null || executorService.isShutdown()) return;
 
-        // Calcula o intervalo baseado no tempo restante: 
+        // Calcula o intervalo baseado no tempo restante:
         // Vai de INTERVALO_SPAWN_ALVO (ex: 3000ms) até 500ms no final da partida
         float proporcao = Math.max(0, (float) tempoRestante / DURACAO_PARTIDA_SEGUNDOS);
         long intervalo = 500 + (long) ((INTERVALO_SPAWN_ALVO - 500) * proporcao);
@@ -821,14 +782,12 @@ public class Jogo {
             // FIX: Melhoria Técnica: Preemption Leak nos Buffers
             transferBufferDireita.clear();
             transferBufferEsquerda.clear();
-            for (int i = 0; i < alvosEsquerdo.size(); i++) {
-                Alvo alvo = alvosEsquerdo.get(i);
+            for (Alvo alvo : alvosEsquerdo) {
                 if (geom.determineLado(alvo.getX()) == Lado.DIREITO) {
                     transferBufferDireita.add(alvo);
                 }
             }
-            for (int i = 0; i < alvosDireito.size(); i++) {
-                Alvo alvo = alvosDireito.get(i);
+            for (Alvo alvo : alvosDireito) {
                 if (geom.determineLado(alvo.getX()) == Lado.ESQUERDO) {
                     transferBufferEsquerda.add(alvo);
                 }
@@ -837,12 +796,12 @@ public class Jogo {
             if (!transferBufferDireita.isEmpty()) {
                 alvosEsquerdo.removeAll(transferBufferDireita);
                 alvosDireito.addAll(transferBufferDireita);
-                for (int i = 0; i < transferBufferDireita.size(); i++) liberarAlvo(transferBufferDireita.get(i));
+                for (Alvo alvo : transferBufferDireita) liberarAlvo(alvo);
             }
             if (!transferBufferEsquerda.isEmpty()) {
                 alvosDireito.removeAll(transferBufferEsquerda);
                 alvosEsquerdo.addAll(transferBufferEsquerda);
-                for (int i = 0; i < transferBufferEsquerda.size(); i++) liberarAlvo(transferBufferEsquerda.get(i));
+                for (Alvo alvo : transferBufferEsquerda) liberarAlvo(alvo);
             }
         }
 
@@ -859,12 +818,10 @@ public class Jogo {
                 synchronized (listLock) {
                     quadTreeEsquerdo = new QuadTree(0, boundsEsquerdo);
                     quadTreeDireito = new QuadTree(0, boundsDireito);
-                    for (int i = 0; i < alvosEsquerdo.size(); i++) {
-                        Alvo alvo = alvosEsquerdo.get(i);
+                    for (Alvo alvo : alvosEsquerdo) {
                         if (alvo.isAtivo()) quadTreeEsquerdo.insert(alvo);
                     }
-                    for (int i = 0; i < alvosDireito.size(); i++) {
-                        Alvo alvo = alvosDireito.get(i);
+                    for (Alvo alvo : alvosDireito) {
                         if (alvo.isAtivo()) quadTreeDireito.insert(alvo);
                     }
                 }
@@ -900,8 +857,7 @@ public class Jogo {
         int pontos = 0;
         float energiaRegenerada = 0f;
 
-        for (int i = 0; i < lista.size(); i++) {
-            Alvo alvo = lista.get(i);
+        for (Alvo alvo : lista) {
             if (!alvo.isAtivo()) {
                 pontos += calcularPontosAbate(alvo);
                 energiaRegenerada += calcularEnergiaRegenerada(alvo);
@@ -929,7 +885,7 @@ public class Jogo {
 
     /**
      * Calcula pontos de abate com bônus/penalidade temporal.
-     * 
+     *
      * Abate rápido (<2s)  → 5 pontos (posicionamento perfeito)
      * Abate médio  (<4s)  → 3 pontos (posicionamento aceitável)
      * Abate lento  (<7s)  → 1 ponto  (penalidade por demora)
@@ -977,21 +933,11 @@ public class Jogo {
     }
 
     private void pararTodasThreads() {
-        List<Alvo> alvosParaParar = new ArrayList<>();
-        synchronized(listLock) {
-            alvosParaParar.addAll(alvosEsquerdo);
-            alvosParaParar.addAll(alvosDireito);
-        }
-        for (Alvo a : alvosParaParar) {
+        for (Alvo a : getAllAlvos()) {
             a.setAtivo(false);
             interromperEEsperar(a, 200);
         }
-        List<Canhao> canhoesParaParar = new ArrayList<>();
-        synchronized (canhoesLock) {
-            canhoesParaParar.addAll(canhoesEsquerdo);
-            canhoesParaParar.addAll(canhoesDireito);
-        }
-        for (Canhao c : canhoesParaParar) {
+        for (Canhao c : getAllCanhoes()) {
             pararCanhaoComJoin(c, 400);
         }
         if (sensorThread != null) {
@@ -1041,8 +987,7 @@ public class Jogo {
     private void notificarAlvosAtivos() {
         if (listener != null) {
             int ativos = 0;
-            for (int i = 0; i < alvosEsquerdo.size(); i++) { if (alvosEsquerdo.get(i).isAtivo()) ativos++; }
-            for (int i = 0; i < alvosDireito.size(); i++) { if (alvosDireito.get(i).isAtivo()) ativos++; }
+            for (Alvo a : getAllAlvos()) { if (a.isAtivo()) ativos++; }
             listener.onAlvosAtivosAtualizado(ativos);
         }
     }
@@ -1075,7 +1020,6 @@ public class Jogo {
      */
     public List<Canhao> getCanhoes() { return getAllCanhoes(); }
     public Object getCollisionLock() { return collisionLock; }
-    public Object getCanhoesLock() { return canhoesLock; }
 
     public void setDimensoesTela(int largura, int altura) {
         this.larguraTela = largura;
@@ -1103,15 +1047,11 @@ public class Jogo {
      * Formato: chave=valor|chave=valor (compatível com ferramentas de plotagem).
      */
     public void registrarMetricasEstruturadas() {
-        int nCanhoesEsq;
-        int nCanhoeDir;
-        synchronized (canhoesLock) {
-            nCanhoesEsq = canhoesEsquerdo.size();
-            nCanhoeDir = canhoesDireito.size();
-        }
+        int nCanhoesEsq = canhoesEsquerdo.size();
+        int nCanhoeDir = canhoesDireito.size();
         float fatorEsq = 1.0f + Math.max(0, nCanhoesEsq - LIMIAR_PENALIDADE) * 0.2f;
         float fatorDir = 1.0f + Math.max(0, nCanhoeDir - LIMIAR_PENALIDADE) * 0.2f;
-        
+
         Log.i("AUTOTARGET_DASHBOARD", String.format(Locale.US,
                 "Tempo:%d|EsqEnergia:%.0f|DirEnergia:%.0f|EsqCanhoes:%d|DirCanhoes:%d|EsqFator:%.2f|DirFator:%.2f|EsqPts:%d|DirPts:%d",
                 tempoRestante, energyManagerEsquerdo.get(), energyManagerDireito.get(),
@@ -1121,8 +1061,8 @@ public class Jogo {
 
     public void setUseQuadTree(boolean use) { this.useQuadTree = use; }
     public boolean isUseQuadTree() { return useQuadTree; }
-    public QuadTree getQuadTree(Lado lado) { 
-        return lado == Lado.ESQUERDO ? quadTreeEsquerdo : quadTreeDireito; 
+    public QuadTree getQuadTree(Lado lado) {
+        return lado == Lado.ESQUERDO ? quadTreeEsquerdo : quadTreeDireito;
     }
     public FirestoreRepository getFirestoreRepository() { return firestoreRepository; }
     public Cryptography getCryptography() { return cryptography; }
@@ -1133,19 +1073,15 @@ public class Jogo {
 
     public List<Alvo> getAllAlvos() {
         List<Alvo> list = new ArrayList<>();
-        synchronized(listLock) {
-            list.addAll(alvosEsquerdo);
-            list.addAll(alvosDireito);
-        }
+        list.addAll(alvosEsquerdo);
+        list.addAll(alvosDireito);
         return list;
     }
 
     public List<Canhao> getAllCanhoes() {
         List<Canhao> list = new ArrayList<>();
-        synchronized (canhoesLock) {
-            list.addAll(canhoesEsquerdo);
-            list.addAll(canhoesDireito);
-        }
+        list.addAll(canhoesEsquerdo);
+        list.addAll(canhoesDireito);
         return list;
     }
 }
