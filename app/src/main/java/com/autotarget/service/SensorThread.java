@@ -126,13 +126,7 @@ public class SensorThread extends Thread {
 
     @Override
     public void run() {
-        try {
-            java.lang.reflect.Method method = android.os.Process.class.getDeclaredMethod("setThreadAffinityMask", int.class, int.class);
-            method.setAccessible(true);
-            method.invoke(null, android.os.Process.myTid(), 0b0011);
-        } catch (Exception e) {
-            Log.w(TAG, "Process Affinity setup falhou", e);
-        }
+        com.autotarget.util.ThreadAffinityHelper.setAffinityForBackgroundTask(android.os.Process.myTid());
 
         while (ativo) {
             long startNs = System.nanoTime();

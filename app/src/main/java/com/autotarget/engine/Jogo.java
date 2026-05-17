@@ -320,8 +320,7 @@ public class Jogo {
             @Override
             public void run() {
                 if (!affinitySet) {
-                    com.autotarget.util.ThreadAffinityHelper.trySetAffinityPreferProcessApi(
-                            android.os.Process.myTid(), com.autotarget.util.ThreadAffinityHelper.BIG_CORES);
+                    com.autotarget.util.ThreadAffinityHelper.setAffinityForCriticalTask(android.os.Process.myTid());
                     affinitySet = true;
                 }
 
