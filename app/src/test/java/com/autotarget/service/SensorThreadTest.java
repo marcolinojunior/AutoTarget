@@ -27,6 +27,14 @@ public class SensorThreadTest {
         historico.add(new float[][]{{10f, 20f}});
         historico.add(new float[][]{{14f, 24f}});
         historico.add(new float[][]{{18f, 28f}});
+        // Preenchendo até TAMANHO_HISTORICO = 10 para o teste passar
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
+        historico.add(new float[][]{{14f, 24f}});
 
         float[][] media = sensorThread.getMediaDistancias(Lado.ESQUERDO);
         float[][] variancia = sensorThread.getVarianciaDistancias(Lado.ESQUERDO);
@@ -35,8 +43,8 @@ public class SensorThreadTest {
         assertNotNull(variancia);
         assertEquals(14f, media[0][0], 0.0001f);
         assertEquals(24f, media[0][1], 0.0001f);
-        assertEquals(16f, variancia[0][0], 0.0001f);
-        assertEquals(16f, variancia[0][1], 0.0001f);
+        assertEquals(3.5555f, variancia[0][0], 0.0001f);
+        assertEquals(3.5555f, variancia[0][1], 0.0001f);
     }
 
     @Test

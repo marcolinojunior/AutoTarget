@@ -353,7 +353,7 @@ public class SensorThread extends Thread {
     public float[][] getMediaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            if (dado == null || dado.historicoDistancias.isEmpty()) return null;
+            if (dado == null || dado.historicoDistancias.size() < TAMANHO_HISTORICO) return null;
 
             int M = dado.historicoDistancias.getLast().length;
             int N = dado.historicoDistancias.getLast()[0].length;
@@ -393,7 +393,7 @@ public class SensorThread extends Thread {
     public float[][] getVarianciaDistancias(Lado lado) {
         synchronized (sensorLock) {
             SideSensorData dado = dadosPorLado.get(lado);
-            if (dado == null || dado.historicoDistancias.size() < 2) return null;
+            if (dado == null || dado.historicoDistancias.size() < TAMANHO_HISTORICO) return null;
             float[][] media = getMediaDistancias(lado);
             if (media == null) return null;
 

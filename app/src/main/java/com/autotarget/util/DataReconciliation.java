@@ -330,6 +330,22 @@ public class DataReconciliation {
     }
 
     /**
+     * Calcula a variância amostral de um vetor.
+     */
+    public static double calcularVariancia(double[] valores) {
+        if (valores == null || valores.length < 2) return 0;
+        double soma = 0;
+        for (double v : valores) soma += v;
+        double media = soma / valores.length;
+
+        double somaQuad = 0;
+        for (double v : valores) {
+            somaQuad += (v - media) * (v - media);
+        }
+        return somaQuad / (valores.length - 1);
+    }
+
+    /**
      * Calcula erro RMS antes e depois da reconciliação.
      * Retorna array: [erroAntes, erroDepois, reducaoPercentual]
      *

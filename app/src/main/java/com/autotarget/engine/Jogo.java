@@ -313,8 +313,16 @@ public class Jogo {
         // Physics Executor — verificação de colisões a cada 16ms (~60Hz)
         // T1: PhysicsTask P=16ms C=2-4ms D=16ms Prio=1 (Máxima)
         physicsTask = executorService.scheduleAtFixedRate(new Runnable() {
+            private boolean affinitySet = false;
+
             @Override
             public void run() {
+                if (!affinitySet) {
+                    com.autotarget.util.ThreadAffinityHelper.trySetAffinityPreferProcessApi(
+                            android.os.Process.myTid(), com.autotarget.util.ThreadAffinityHelper.BIG_CORES);
+                    affinitySet = true;
+                }
+
                 if (estado == Estado.RODANDO) {
                     long startNs = System.nanoTime();
                     
