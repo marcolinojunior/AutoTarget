@@ -146,6 +146,8 @@ public class Canhao extends Thread {
                     disparar();
                 }
 
+                if (!ativo) break; // Garante que a parada seja imediata, sem atraso residual
+
                 limparProjetisInativos();
 
                 // Intervalo com penalidade térmica aplicada
