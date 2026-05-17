@@ -100,11 +100,16 @@ import android.graphics.RectF;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Controlador central do jogo AutoTarget.
@@ -161,27 +166,37 @@ public class Jogo {
     private final ConcurrentHashMap<Alvo, Canhao> reservasAlvos = new ConcurrentHashMap<>();
 
     /** Pontuação de cada lado. */
-    private volatile int pontuacaoEsquerdo;
-    private volatile int pontuacaoDireito;
+    private final AtomicInteger pontuacaoEsquerdo = new AtomicInteger(0);
+    private final AtomicInteger pontuacaoDireito = new AtomicInteger(0);
 
     /** Energia de cada lado. */
     private volatile float energiaEsquerdo;
     private volatile float energiaDireito;
+    private final Object energiaLock = new Object();
 
     private volatile int tempoRestante;
     private long timestampInicio;
     private int larguraTela;
     private int alturaTela;
 
-    private Timer spawnTimer;
-    private Timer gameTimer;
+    private ScheduledExecutorService executorService;
+    private ScheduledFuture<?> spawnTask;
+    private ScheduledFuture<?> gameTask;
 
     /**
-     * Timer dedicado para verificação de colisões a cada 16ms (~60Hz).
+     * Executor dedicado para verificação de colisões a cada 16ms (~60Hz).
      * Único responsável por contabilizar pontos e remover alvos inativos,
      * desacoplando completamente a lógica de colisão da renderização.
      */
-    private Timer physicsTimer;
+    private ScheduledFuture<?> physicsTask;
+
+    // Buffers para evitar GC Churn na transferência de alvos
+    private final List<Alvo> transferBufferEsquerda = new ArrayList<>();
+    private final List<Alvo> transferBufferDireita = new ArrayList<>();
+
+    // Buffers para evitar GC Churn no QuadTree
+    private RectF boundsEsquerdo;
+    private RectF boundsDireito;
 
     private final Random random = new Random();
 
@@ -227,8 +242,8 @@ public class Jogo {
         this.canhoesEsquerdo = new CopyOnWriteArrayList<>();
         this.canhoesDireito = new CopyOnWriteArrayList<>();
         this.estado = Estado.PARADO;
-        this.pontuacaoEsquerdo = 0;
-        this.pontuacaoDireito = 0;
+        this.pontuacaoEsquerdo.set(0);
+        this.pontuacaoDireito.set(0);
         this.energiaEsquerdo = ENERGIA_MAXIMA;
         this.energiaDireito = ENERGIA_MAXIMA;
         this.tempoRestante = DURACAO_PARTIDA_SEGUNDOS;
@@ -251,8 +266,8 @@ public class Jogo {
         }
 
         estado = Estado.RODANDO;
-        pontuacaoEsquerdo = 0;
-        pontuacaoDireito = 0;
+        pontuacaoEsquerdo.set(0);
+        pontuacaoDireito.set(0);
         energiaEsquerdo = ENERGIA_MAXIMA;
         energiaDireito = ENERGIA_MAXIMA;
         tempoRestante = DURACAO_PARTIDA_SEGUNDOS;
@@ -260,9 +275,11 @@ public class Jogo {
         timestampInicio = System.currentTimeMillis();
         ReconciliationLog.getInstance().reset();
 
-        // Timer de spawn de alvos
-        spawnTimer = new Timer("SpawnAlvoTimer", true);
-        spawnTimer.schedule(new TimerTask() {
+        // Substituindo Timers por ScheduledThreadPoolExecutor para Hard Real-Time
+        executorService = Executors.newScheduledThreadPool(3);
+
+        // Agendador de spawn de alvos
+        spawnTask = executorService.schedule(new Runnable() {
             @Override
             public void run() {
                 if (estado == Estado.RODANDO) {
@@ -270,11 +287,10 @@ public class Jogo {
                     agendarProximoSpawn();
                 }
             }
-        }, 0);
+        }, 0, TimeUnit.MILLISECONDS);
 
-        // Timer principal: contagem regressiva + energia
-        gameTimer = new Timer("GameTimer", true);
-        gameTimer.scheduleAtFixedRate(new TimerTask() {
+        // Agendador principal: contagem regressiva + energia
+        gameTask = executorService.scheduleAtFixedRate(new Runnable() {
             private int segundosDecorridos = 0;
 
             @Override
@@ -286,17 +302,17 @@ public class Jogo {
                 atualizarEnergia();
                 aplicarPenalidades();
                 registrarMetricasEnergiaPenalidade();
+                registrarMetricasEstruturadas();
                 notificarTempo();
                 notificarEnergia();
 
                 if (tempoRestante <= 0) encerrarPartida();
             }
-        }, 1000, 1000);
+        }, 1000, 1000, TimeUnit.MILLISECONDS);
 
-        // Physics Timer — verificação de colisões a cada 16ms (~60Hz)
-        // T1: PhysicsTimer P=16ms C=2-4ms D=16ms Prio=1 (Máxima)
-        physicsTimer = new Timer("PhysicsTimer", true);
-        physicsTimer.scheduleAtFixedRate(new TimerTask() {
+        // Physics Executor — verificação de colisões a cada 16ms (~60Hz)
+        // T1: PhysicsTask P=16ms C=2-4ms D=16ms Prio=1 (Máxima)
+        physicsTask = executorService.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
                 if (estado == Estado.RODANDO) {
@@ -315,7 +331,7 @@ public class Jogo {
                     RMAAnalysis.checkDeadline("T1-Physics", elapsedMs, 16);
                 }
             }
-        }, 0, 16);
+        }, 0, 16, TimeUnit.MILLISECONDS);
 
         // Thread Sensores/Coleta (com ref canhões para distâncias)
         sensorThread = new SensorThread(this, sensorLock, collisionLock);
@@ -331,8 +347,10 @@ public class Jogo {
             @Override
             public void onReconciliacaoConcluida(int totalRec) {
                 reconciliacoesRealizadas = totalRec;
-                energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + 10f);
-                energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + 10f);
+                synchronized (energiaLock) {
+                    energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + 10f);
+                    energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + 10f);
+                }
                 notificarEnergia();
             }
             @Override
@@ -395,10 +413,12 @@ public class Jogo {
         long tempoTotal = (System.currentTimeMillis() - timestampInicio) / 1000;
 
         // Determinar vencedor
+        int pEsq = pontuacaoEsquerdo.get();
+        int pDir = pontuacaoDireito.get();
         Lado vencedor;
-        if (pontuacaoEsquerdo > pontuacaoDireito) {
+        if (pEsq > pDir) {
             vencedor = Lado.ESQUERDO;
-        } else if (pontuacaoDireito > pontuacaoEsquerdo) {
+        } else if (pDir > pEsq) {
             vencedor = Lado.DIREITO;
         } else {
             vencedor = null; // Empate
@@ -406,13 +426,13 @@ public class Jogo {
 
         // Salvar via Thread Firebase I/O (DTO completo + criptografia)
         if (firebaseIOThread != null && firebaseIOThread.isAlive()) {
-            String dados = "esquerdo=" + pontuacaoEsquerdo
-                    + ";direito=" + pontuacaoDireito
+            String dados = "esquerdo=" + pEsq
+                    + ";direito=" + pDir
                     + ";tempo=" + tempoTotal
                     + ";reconciliacoes=" + reconciliacoesRealizadas;
             String vencedorStr = vencedor != null ? vencedor.name() : "EMPATE";
             firebaseIOThread.salvarAsync(
-                    pontuacaoEsquerdo, pontuacaoDireito, tempoTotal,
+                    pEsq, pDir, tempoTotal,
                     reconciliacoesRealizadas, vencedorStr, dados);
         }
 
@@ -423,7 +443,7 @@ public class Jogo {
         notificarTempo();
 
         if (listener != null) {
-            listener.onPartidaEncerrada(pontuacaoEsquerdo, pontuacaoDireito,
+            listener.onPartidaEncerrada(pEsq, pDir,
                     (int) tempoTotal, reconciliacoesRealizadas, vencedor);
             listener.onRelatorioReconciliacao(relatorio);
         }
@@ -439,18 +459,19 @@ public class Jogo {
         for (Canhao c : canhoesDireito) {
             if (c.isAtivo()) canhoesDir++;
         }
+        synchronized (energiaLock) {
+            energiaEsquerdo = Math.max(0f, energiaEsquerdo - canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
+            energiaDireito = Math.max(0f, energiaDireito - canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
 
-        energiaEsquerdo = Math.max(0f, energiaEsquerdo - canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
-        energiaDireito = Math.max(0f, energiaDireito - canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
-
-        // Se energia de um lado acabou, desativar último canhão desse lado
-        if (energiaEsquerdo <= 0f && canhoesEsq > 0) {
-            desativarUltimoCanhao(Lado.ESQUERDO);
-            energiaEsquerdo = 0f;
-        }
-        if (energiaDireito <= 0f && canhoesDir > 0) {
-            desativarUltimoCanhao(Lado.DIREITO);
-            energiaDireito = 0f;
+            // Se energia de um lado acabou, desativar último canhão desse lado
+            if (energiaEsquerdo <= 0f && canhoesEsq > 0) {
+                desativarUltimoCanhao(Lado.ESQUERDO);
+                energiaEsquerdo = 0f;
+            }
+            if (energiaDireito <= 0f && canhoesDir > 0) {
+                desativarUltimoCanhao(Lado.DIREITO);
+                energiaDireito = 0f;
+            }
         }
     }
 
@@ -534,7 +555,9 @@ public class Jogo {
      * @return energia atual
      */
     public float getEnergia(Lado lado) {
-        return (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
+        synchronized (energiaLock) {
+            return (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
+        }
     }
 
     // ── Sistema de Reserva de Alvos (Coordenação de Disparos) ────
@@ -646,30 +669,32 @@ public class Jogo {
         }
 
         CopyOnWriteArrayList<Canhao> listaCanhoes = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
-        int countLado = listaCanhoes.size();
+        synchronized (listLock) {
+            int countLado = listaCanhoes.size();
 
-        if (countLado >= MAX_CANHOES_POR_LADO) {
-            throw new JogoException(
-                    "Máximo de canhões no lado " + lado + " atingido (" + MAX_CANHOES_POR_LADO + ")!");
-        }
+            if (countLado >= MAX_CANHOES_POR_LADO) {
+                throw new JogoException(
+                        "Máximo de canhões no lado " + lado + " atingido (" + MAX_CANHOES_POR_LADO + ")!");
+            }
 
-        // Verificar energia do lado
-        float energiaLado = (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
-        if (estado == Estado.RODANDO && energiaLado < CUSTO_ENERGIA_POR_CANHAO) {
-            throw new JogoException("Energia insuficiente no lado " + lado + "!");
-        }
+            // Verificar energia do lado
+            float energiaLado = getEnergia(lado);
+            if (estado == Estado.RODANDO && energiaLado < CUSTO_ENERGIA_POR_CANHAO) {
+                throw new JogoException("Energia insuficiente no lado " + lado + "!");
+            }
 
-        CopyOnWriteArrayList<Alvo> listaAlvos = (lado == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
-        Canhao canhao = new Canhao(x, y, lado, listaAlvos, collisionLock,
-                larguraTela, alturaTela, this);
+            CopyOnWriteArrayList<Alvo> listaAlvos = (lado == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+            Canhao canhao = new Canhao(x, y, lado, listaAlvos, collisionLock,
+                    larguraTela, alturaTela, this);
 
-        // Penalty check
-        canhao.aplicarPenalidade(countLado + 1);
+            // Penalty check
+            canhao.aplicarPenalidade(countLado + 1);
 
-        listaCanhoes.add(canhao);
+            listaCanhoes.add(canhao);
 
-        if (estado == Estado.RODANDO) {
-            canhao.start();
+            if (estado == Estado.RODANDO) {
+                canhao.start();
+            }
         }
     }
 
@@ -689,7 +714,8 @@ public class Jogo {
                 alvo = new AlvoRapido(x, y, RAIO_ALVO, VELOCIDADE_ALVO, larguraTela, alturaTela);
             }
 
-            Lado lado = Lado.determinar(x, larguraTela);
+            com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
+            Lado lado = geom.determineLado(x);
             if (lado == Lado.ESQUERDO) {
                 alvosEsquerdo.add(alvo);
             } else {
@@ -704,7 +730,7 @@ public class Jogo {
     }
 
     private void agendarProximoSpawn() {
-        if (estado != Estado.RODANDO || spawnTimer == null) return;
+        if (estado != Estado.RODANDO || executorService == null || executorService.isShutdown()) return;
 
         // Calcula o intervalo baseado no tempo restante: 
         // Vai de INTERVALO_SPAWN_ALVO (ex: 3000ms) até 500ms no final da partida
@@ -712,7 +738,7 @@ public class Jogo {
         long intervalo = 500 + (long) ((INTERVALO_SPAWN_ALVO - 500) * proporcao);
 
         try {
-            spawnTimer.schedule(new TimerTask() {
+            spawnTask = executorService.schedule(new Runnable() {
                 @Override
                 public void run() {
                     if (estado == Estado.RODANDO) {
@@ -720,7 +746,7 @@ public class Jogo {
                         agendarProximoSpawn();
                     }
                 }
-            }, intervalo);
+            }, intervalo, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             Log.e("Jogo", "Erro ao agendar spawn de alvo", e);
         }
@@ -734,44 +760,45 @@ public class Jogo {
      */
     private void transferirAlvosCruzados() {
         if (larguraTela <= 0) return;
-        List<Alvo> moverParaDireita = new ArrayList<>();
-        List<Alvo> moverParaEsquerda = new ArrayList<>();
+        transferBufferDireita.clear();
+        transferBufferEsquerda.clear();
 
+        com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
         // Remover bloqueios globais iterando sob uma view atomicamente segura:
         for (Alvo alvo : alvosEsquerdo) {
-            if (Lado.determinar(alvo.getX(), larguraTela) == Lado.DIREITO) {
-                moverParaDireita.add(alvo);
+            if (geom.determineLado(alvo.getX()) == Lado.DIREITO) {
+                transferBufferDireita.add(alvo);
             }
         }
         for (Alvo alvo : alvosDireito) {
-            if (Lado.determinar(alvo.getX(), larguraTela) == Lado.ESQUERDO) {
-                moverParaEsquerda.add(alvo);
+            if (geom.determineLado(alvo.getX()) == Lado.ESQUERDO) {
+                transferBufferEsquerda.add(alvo);
             }
         }
 
-        if (!moverParaDireita.isEmpty()) {
-            alvosEsquerdo.removeAll(moverParaDireita);
-            alvosDireito.addAll(moverParaDireita);
-            for (Alvo alvo : moverParaDireita) liberarAlvo(alvo);
+        if (!transferBufferDireita.isEmpty()) {
+            alvosEsquerdo.removeAll(transferBufferDireita);
+            alvosDireito.addAll(transferBufferDireita);
+            for (Alvo alvo : transferBufferDireita) liberarAlvo(alvo);
         }
-        if (!moverParaEsquerda.isEmpty()) {
-            alvosDireito.removeAll(moverParaEsquerda);
-            alvosEsquerdo.addAll(moverParaEsquerda);
-            for (Alvo alvo : moverParaEsquerda) liberarAlvo(alvo);
+        if (!transferBufferEsquerda.isEmpty()) {
+            alvosDireito.removeAll(transferBufferEsquerda);
+            alvosEsquerdo.addAll(transferBufferEsquerda);
+            for (Alvo alvo : transferBufferEsquerda) liberarAlvo(alvo);
         }
 
-        if (!moverParaDireita.isEmpty() || !moverParaEsquerda.isEmpty()) {
-            Log.d("Jogo", "Transferência de alvos: ESQ->DIR=" + moverParaDireita.size()
-                    + " DIR->ESQ=" + moverParaEsquerda.size());
+        if (!transferBufferDireita.isEmpty() || !transferBufferEsquerda.isEmpty()) {
+            Log.d("Jogo", "Transferência de alvos: ESQ->DIR=" + transferBufferDireita.size()
+                    + " DIR->ESQ=" + transferBufferEsquerda.size());
         }
     }
 
     public int verificarColisoes() {
         // Reconstruir QuadTree (Otimização AV4)
-        if (useQuadTree && larguraTela > 0 && alturaTela > 0) {
+        if (useQuadTree && larguraTela > 0 && alturaTela > 0 && boundsEsquerdo != null) {
             synchronized (collisionLock) {
-                quadTreeEsquerdo = new QuadTree(0, new RectF(0, 0, larguraTela / 2f, alturaTela));
-                quadTreeDireito = new QuadTree(0, new RectF(larguraTela / 2f, 0, larguraTela, alturaTela));
+                quadTreeEsquerdo = new QuadTree(0, boundsEsquerdo);
+                quadTreeDireito = new QuadTree(0, boundsDireito);
                 for (Alvo alvo : alvosEsquerdo) {
                     if (alvo.isAtivo()) quadTreeEsquerdo.insert(alvo);
                 }
@@ -787,10 +814,10 @@ public class Jogo {
         int destruidos = 0;
         synchronized (collisionLock) {
             if (!alvosEsquerdo.isEmpty() || !alvosDireito.isEmpty()) {
-                synchronized (listLock) {
-                    destruidos += processarAlvosInativos(alvosEsquerdo, Lado.ESQUERDO);
-                    destruidos += processarAlvosInativos(alvosDireito, Lado.DIREITO);
-                }
+                // Removido synchronized(listLock) pois processarAlvosInativos itera e usa removeAll
+                // que já é seguro na CopyOnWriteArrayList, evitando concorrência excessiva (Audit 2.5)
+                destruidos += processarAlvosInativos(alvosEsquerdo, Lado.ESQUERDO);
+                destruidos += processarAlvosInativos(alvosDireito, Lado.DIREITO);
             }
         }
 
@@ -821,11 +848,15 @@ public class Jogo {
         if (!removidos.isEmpty()) {
             lista.removeAll(removidos);
             if (lado == Lado.ESQUERDO) {
-                pontuacaoEsquerdo += pontos;
-                energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + energiaRegenerada);
+                pontuacaoEsquerdo.addAndGet(pontos);
+                synchronized (energiaLock) {
+                    energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + energiaRegenerada);
+                }
             } else {
-                pontuacaoDireito += pontos;
-                energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + energiaRegenerada);
+                pontuacaoDireito.addAndGet(pontos);
+                synchronized (energiaLock) {
+                    energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + energiaRegenerada);
+                }
             }
         }
         return removidos.size();
@@ -873,9 +904,13 @@ public class Jogo {
     // ── Helpers ──────────────────────────────────────────────────
 
     private void pararTimers() {
-        if (spawnTimer != null) { spawnTimer.cancel(); spawnTimer = null; }
-        if (gameTimer != null) { gameTimer.cancel(); gameTimer = null; }
-        if (physicsTimer != null) { physicsTimer.cancel(); physicsTimer = null; }
+        if (spawnTask != null) { spawnTask.cancel(true); spawnTask = null; }
+        if (gameTask != null) { gameTask.cancel(true); gameTask = null; }
+        if (physicsTask != null) { physicsTask.cancel(true); physicsTask = null; }
+        if (executorService != null) {
+            executorService.shutdownNow();
+            executorService = null;
+        }
     }
 
     private void pararTodasThreads() {
@@ -891,6 +926,8 @@ public class Jogo {
             interromperEEsperar(sensorThread, 500);
         }
         if (reconciliacaoThread != null) {
+            // Evitar vazamento de referência ao Jogo/Activity via listener
+            try { reconciliacaoThread.setListener(null); } catch (Exception ignored) {}
             reconciliacaoThread.setAtivo(false);
             interromperEEsperar(reconciliacaoThread, 500);
         }
@@ -921,7 +958,7 @@ public class Jogo {
     // ── Notificações ─────────────────────────────────────────────
 
     private void notificarPontuacao() {
-        if (listener != null) listener.onPontuacaoAtualizada(pontuacaoEsquerdo, pontuacaoDireito);
+        if (listener != null) listener.onPontuacaoAtualizada(pontuacaoEsquerdo.get(), pontuacaoDireito.get());
     }
 
     private void notificarEstado() {
@@ -947,10 +984,10 @@ public class Jogo {
     // ── Getters / Setters ────────────────────────────────────────
 
     public Estado getEstado() { return estado; }
-    public int getPontuacaoEsquerdo() { return pontuacaoEsquerdo; }
-    public int getPontuacaoDireito() { return pontuacaoDireito; }
-    public float getEnergiaEsquerdo() { return energiaEsquerdo; }
-    public float getEnergiaDireito() { return energiaDireito; }
+    public int getPontuacaoEsquerdo() { return pontuacaoEsquerdo.get(); }
+    public int getPontuacaoDireito() { return pontuacaoDireito.get(); }
+    public float getEnergiaEsquerdo() { synchronized (energiaLock) { return energiaEsquerdo; } }
+    public float getEnergiaDireito() { synchronized (energiaLock) { return energiaDireito; } }
     public int getTempoRestante() { return tempoRestante; }
     /**
      * Retorna defensive copy da lista de alvos.
@@ -968,6 +1005,14 @@ public class Jogo {
     public void setDimensoesTela(int largura, int altura) {
         this.larguraTela = largura;
         this.alturaTela = altura;
+        if (largura > 0 && altura > 0) {
+            this.boundsEsquerdo = new RectF(0, 0, largura / 2f, altura);
+            this.boundsDireito = new RectF(largura / 2f, 0, largura, altura);
+        }
+        if (reconciliacaoThread != null) {
+            reconciliacaoThread.setLarguraTela(largura);
+            reconciliacaoThread.setAlturaTela(altura);
+        }
     }
 
     public int getLarguraTela() { return larguraTela; }
@@ -977,6 +1022,23 @@ public class Jogo {
 
     public static float getEnergiaMaxima() { return ENERGIA_MAXIMA; }
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
+
+    /**
+     * Registra métricas estruturadas para profiling e análise de desempenho.
+     * Formato: chave=valor|chave=valor (compatível com ferramentas de plotagem).
+     */
+    public void registrarMetricasEstruturadas() {
+        int nCanhoesEsq = canhoesEsquerdo.size();
+        int nCanhoeDir = canhoesDireito.size();
+        float fatorEsq = 1.0f + Math.max(0, nCanhoesEsq - LIMIAR_PENALIDADE) * 0.2f;
+        float fatorDir = 1.0f + Math.max(0, nCanhoeDir - LIMIAR_PENALIDADE) * 0.2f;
+        
+        Log.i("AUTOTARGET_DASHBOARD", String.format(Locale.US,
+                "Tempo:%d|EsqEnergia:%.0f|DirEnergia:%.0f|EsqCanhoes:%d|DirCanhoes:%d|EsqFator:%.2f|DirFator:%.2f|EsqPts:%d|DirPts:%d",
+                tempoRestante, energiaEsquerdo, energiaDireito,
+                nCanhoesEsq, nCanhoeDir, fatorEsq, fatorDir,
+                pontuacaoEsquerdo.get(), pontuacaoDireito.get()));
+    }
 
     public void setUseQuadTree(boolean use) { this.useQuadTree = use; }
     public boolean isUseQuadTree() { return useQuadTree; }

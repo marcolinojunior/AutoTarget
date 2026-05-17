@@ -34,6 +34,8 @@
  */
 package com.autotarget.model;
 
+import android.util.Log;
+
 /**
  * Representa o lado (campo) do jogo.
  * <p>
@@ -57,6 +59,10 @@ public enum Lado {
      * @return ESQUERDO se x < metade, DIREITO caso contrário
      */
     public static Lado determinar(float x, int larguraTela) {
+        if (larguraTela <= 0) {
+            Log.w("Lado", "larguraTela inválida: " + larguraTela + ", assumindo ESQUERDO");
+            return ESQUERDO;
+        }
         return (x < larguraTela / 2f) ? ESQUERDO : DIREITO;
     }
 }

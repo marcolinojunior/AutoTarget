@@ -74,6 +74,8 @@ import com.autotarget.model.Alvo;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 import com.autotarget.model.Projetil;
+import com.autotarget.util.ReconciliationVisualizer;
+import com.autotarget.util.SensorStatisticsTracker;
 
 /**
  * SurfaceView customizada para renderizar o campo de jogo AutoTarget.
@@ -86,6 +88,7 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     private RenderThread renderThread;
     private Jogo jogo;
 
+    private final Object dragLock = new Object();
     /** Canhão atualmente sendo arrastado pelo jogador (Drag-and-Drop). */
     private Canhao draggedCanhao;
     /** Flag: true enquanto o dedo está arrastando um canhão. */
@@ -122,14 +125,14 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     private final Paint paintEnergiaBarraDir;
     private final Paint paintEnergiaFundo;
     private final Paint paintTempoBarra;
-    private final SparseArray<Paint> paintAlvoCache = new SparseArray<>();
-    private final SparseArray<Paint> paintGlowCache = new SparseArray<>();
+    
     private final RectF hudRect = new RectF();
     private final RectF hudRectAux = new RectF();
     private final RectF fimBoxRect = new RectF();
     private final Path pathCanhao = new Path();
 
     private static final int TARGET_FPS = 30;
+    private final StringBuilder sbHUD = new StringBuilder(64);
 
     // ── Construtores ─────────────────────────────────────────────
 
@@ -274,8 +277,7 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         paintTextoFim.setAntiAlias(true);
         paintTextoFim.setTextAlign(Paint.Align.CENTER);
 
-        registrarPaintAlvo(0xFF4CAF50);
-        registrarPaintAlvo(0xFFFF9800);
+        GameRenderer.registerDefaults();
     }
 
     // ── SurfaceHolder.Callback ───────────────────────────────────
@@ -297,10 +299,13 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     public void surfaceDestroyed(SurfaceHolder holder) {
         if (renderThread != null) {
             renderThread.setRunning(false);
-            boolean retry = true;
-            while (retry) {
-                try { renderThread.join(); retry = false; }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                renderThread.join(5000); // aguarda até 5s
+            } catch (InterruptedException e) {
+                Log.w("GameSurface", "RenderThread não terminou em tempo", e);
+                Thread.currentThread().interrupt();
+            } finally {
+                renderThread = null;
             }
         }
     }
@@ -324,14 +329,16 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
                 // Só permite interação no lado esquerdo (jogador)
                 if (touchX >= meioX) break;
 
-                // Verificar se tocou num canhão existente
-                draggedCanhao = null;
-                for (Canhao c : jogo.getCanhoesEsquerdo()) {
-                    if (!c.isAtivo()) continue;
-                    float dist = Alvo.calcularDistancia(c.getX(), c.getY(), touchX, touchY);
-                    if (dist < RAIO_TOQUE) {
-                        draggedCanhao = c;
-                        break;
+                // Verificar se tocou num canhão existente (proteção por lock)
+                synchronized (dragLock) {
+                    draggedCanhao = null;
+                    for (Canhao c : jogo.getCanhoesEsquerdo()) {
+                        if (!c.isAtivo()) continue;
+                        float dist = Alvo.calcularDistancia(c.getX(), c.getY(), touchX, touchY);
+                        if (dist < RAIO_TOQUE) {
+                            draggedCanhao = c;
+                            break;
+                        }
                     }
                 }
 
@@ -350,30 +357,34 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
                     }
                 }
 
-                isDragging = (draggedCanhao != null);
+                synchronized (dragLock) { isDragging = (draggedCanhao != null); }
                 break;
 
             case MotionEvent.ACTION_MOVE:
-                if (isDragging && draggedCanhao != null) {
-                    // Limitar ao lado esquerdo
-                    float clampX = Math.min(touchX, meioX - 30);
-                    float clampY = Math.max(90, Math.min(touchY, getHeight() - 20));
-                    draggedCanhao.setPosicao(clampX, clampY);
+                synchronized (dragLock) {
+                    if (isDragging && draggedCanhao != null && draggedCanhao.isAtivo()) {
+                        // Limitar ao lado esquerdo
+                        float clampX = Math.min(touchX, meioX - 30);
+                        float clampY = Math.max(90, Math.min(touchY, getHeight() - 20));
+                        draggedCanhao.setPosicao(clampX, clampY);
+                    }
                 }
                 break;
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                if (isDragging && draggedCanhao != null) {
-                    // Se soltar na zona da lixeira (base da tela), remover
-                    if (touchY > getHeight() - ALTURA_LIXEIRA) {
-                        jogo.removerCanhao(draggedCanhao);
-                        final String msg = "Canhão removido!";
-                        post(() -> Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show());
+                synchronized (dragLock) {
+                    if (isDragging && draggedCanhao != null) {
+                        // Se soltar na zona da lixeira (base da tela), remover
+                        if (touchY > getHeight() - ALTURA_LIXEIRA) {
+                            jogo.removerCanhao(draggedCanhao);
+                            final String msg = "Canhão removido!";
+                            post(() -> Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show());
+                        }
                     }
+                    draggedCanhao = null;
+                    isDragging = false;
                 }
-                draggedCanhao = null;
-                isDragging = false;
                 break;
         }
         return true;
@@ -402,18 +413,20 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         canvas.drawText("IA \uD83E\uDD16", meioX + meioX / 2f, h - 10, paintLabel);
 
         // ── Zona de Lixeira (visível durante arrastar) ──
-        if (isDragging) {
+        boolean draggingSnapshot;
+        synchronized (dragLock) { draggingSnapshot = isDragging; }
+        if (draggingSnapshot) {
             canvas.drawRect(0, h - ALTURA_LIXEIRA, meioX, h, paintLixeira);
             canvas.drawText("\uD83D\uDDD1 SOLTE AQUI PARA REMOVER",
-                    meioX / 2f, h - ALTURA_LIXEIRA / 2f + 8, paintLixeiraTexto);
+                meioX / 2f, h - ALTURA_LIXEIRA / 2f + 8, paintLixeiraTexto);
         }
 
         // ── Alvos (renderização polimórfica via getCorId()) ──
         for (Alvo alvo : jogo.getAlvos()) {
             if (!alvo.isAtivo()) continue;
             int corAlvo = alvo.getCorId();
-            Paint paint = paintForColor(corAlvo);
-            canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio() + 4, glowForColor(corAlvo));
+            Paint paint = GameRenderer.paintForColor(corAlvo);
+            canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio() + 4, GameRenderer.glowForColor(corAlvo));
             canvas.drawCircle(alvo.getX(), alvo.getY(), alvo.getRaio(), paint);
         }
 
@@ -433,6 +446,9 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
 
         // HUD
         desenharHUD(canvas);
+        
+        // Painel de status de reconciliação
+        desenharPainelReconciliacao(canvas);
 
         // REMOVIDA A CHAMADA jogo.verificarColisoes() DESTE MÉTODO DE DESENHO.
         // A verificação de colisões agora é responsabilidade exclusiva do
@@ -452,8 +468,8 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         float pad = 12f;
         float meioX = w / 2f;
 
-        // Fundo HUD
-        canvas.drawRect(0, 0, w, 80, paintHudBg);
+        // Fundo HUD expandido
+        canvas.drawRect(0, 0, w, 110, paintHudBg);
 
         // ── Tempo restante (centro) ──
         int tempo = jogo.getTempoRestante();
@@ -488,17 +504,41 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
             canvas.drawRoundRect(hudRectAux, 3, 3, paintEnergiaBarraDir);
         }
 
-        // ── Pontuações ──
-        paintTexto.setTextSize(20f);
+        // ── Linha de Dashboard: Canhões + Penalidades ──
+        paintTexto.setTextSize(18f);
         paintTexto.setColor(Color.parseColor("#00B4D8"));
-        canvas.drawText("⚡" + (int) jogo.getEnergiaEsquerdo() + "  Pts:" + jogo.getPontuacaoEsquerdo(),
-                pad, 75, paintTexto);
+        
+        int nCanhoesEsq = jogo.getCanhoesEsquerdo().size();
+        int nCanhoeDir = jogo.getCanhoesDireito().size();
+        float fatorEsq = 1.0f + Math.max(0, nCanhoesEsq - Jogo.getLimiarPenalidade()) * 0.2f;
+        float fatorDir = 1.0f + Math.max(0, nCanhoeDir - Jogo.getLimiarPenalidade()) * 0.2f;
+
+        sbHUD.setLength(0);
+        sbHUD.append("⚡").append((int) jogo.getEnergiaEsquerdo())
+            .append(" | Gun:").append(nCanhoesEsq)
+            .append(" | Pena:").append(String.format(java.util.Locale.getDefault(), "%.1fx", fatorEsq));
+        canvas.drawText(sbHUD.toString(), pad, 75, paintTexto);
 
         paintTexto.setColor(Color.parseColor("#E94560"));
         paintTextoDireita.setColor(paintTexto.getColor());
         paintTextoDireita.setTextSize(paintTexto.getTextSize());
-        canvas.drawText("Pts:" + jogo.getPontuacaoDireito() + "  ⚡" + (int) jogo.getEnergiaDireito(),
-                w - pad, 75, paintTextoDireita);
+        sbHUD.setLength(0);
+        sbHUD.append("Pena:").append(String.format(java.util.Locale.getDefault(), "%.1fx", fatorDir))
+            .append(" | Gun:").append(nCanhoeDir)
+            .append(" | ⚡").append((int) jogo.getEnergiaDireito());
+        canvas.drawText(sbHUD.toString(), w - pad, 75, paintTextoDireita);
+
+        // ── Pontuações (linha 2 do dashboard) ──
+        paintTexto.setTextSize(20f);
+        paintTexto.setColor(Color.parseColor("#00B4D8"));
+        canvas.drawText("Pts: " + jogo.getPontuacaoEsquerdo(),
+                pad, 100, paintTexto);
+
+        paintTexto.setColor(Color.parseColor("#E94560"));
+        paintTextoDireita.setColor(paintTexto.getColor());
+        paintTextoDireita.setTextSize(paintTexto.getTextSize());
+        canvas.drawText("Pts: " + jogo.getPontuacaoDireito(),
+                w - pad, 100, paintTextoDireita);
         paintTexto.setTextSize(24f);
     }
 
@@ -563,6 +603,32 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
         canvas.drawPath(pathCanhao, paint);
     }
 
+    /**
+     * Desenha painel com status de reconciliação e sensores.
+     * Exibido na parte inferior da tela em tempo real.
+     */
+    private void desenharPainelReconciliacao(Canvas canvas) {
+        if (jogo == null || jogo.getEstado() != Jogo.Estado.RODANDO) return;
+
+        int h = canvas.getHeight();
+        float y = h - 35f;
+        float pad = 12f;
+        
+        // Status de reconciliação
+        String statusReconc = ReconciliationVisualizer.obterEstatisticasAgregadas();
+        paintTexto.setTextSize(14f);
+        paintTexto.setColor(Color.parseColor("#FFB300"));
+        canvas.drawText("Reconc: " + statusReconc, pad, y, paintTexto);
+        
+        // Status de sensores
+        String statusSensores = "Ruído médio: " + String.format("%.1f%%", 
+                SensorStatisticsTracker.calcularRuidoMedio());
+        paintTexto.setColor(Color.parseColor("#00D4FF"));
+        canvas.drawText(statusSensores, pad, y + 18, paintTexto);
+        
+        paintTexto.setTextSize(24f);
+    }
+
     private void desenharGrid(Canvas canvas) {
         int spacing = 60;
         for (int x = 0; x < canvas.getWidth(); x += spacing)
@@ -572,36 +638,17 @@ public class GameSurfaceView extends SurfaceView implements SurfaceHolder.Callba
     }
 
     private void registrarPaintAlvo(int color) {
-        if (paintAlvoCache.get(color) != null && paintGlowCache.get(color) != null) return;
-
-        Paint base = new Paint();
-        base.setColor(color);
-        base.setAntiAlias(true);
-        base.setStyle(Paint.Style.FILL);
-
-        Paint glow = new Paint(base);
-        glow.setAlpha(60);
-
-        paintAlvoCache.put(color, base);
-        paintGlowCache.put(color, glow);
+        // Moved to GameRenderer
     }
 
     private Paint paintForColor(int color) {
-        Paint paint = paintAlvoCache.get(color);
-        if (paint == null) {
-            registrarPaintAlvo(color);
-            paint = paintAlvoCache.get(color);
-        }
-        return paint;
+        // Moved to GameRenderer
+        return GameRenderer.paintForColor(color);
     }
 
     private Paint glowForColor(int color) {
-        Paint glow = paintGlowCache.get(color);
-        if (glow == null) {
-            registrarPaintAlvo(color);
-            glow = paintGlowCache.get(color);
-        }
-        return glow;
+        // Moved to GameRenderer
+        return GameRenderer.glowForColor(color);
     }
 
     // ── Thread de renderização ───────────────────────────────────

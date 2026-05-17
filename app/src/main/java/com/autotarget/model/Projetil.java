@@ -92,6 +92,8 @@ public class Projetil extends Thread {
 
     /** Alvo reservado para este tiro. Liberado ao errar (sair da tela). */
     private final Alvo alvoReservado;
+    /** Canhão dono deste projétil (callback para remoção imediata). */
+    private final com.autotarget.model.Canhao owner;
 
     // ── Construtor ───────────────────────────────────────────────
 
@@ -111,7 +113,8 @@ public class Projetil extends Thread {
     public Projetil(float x, float y, float direcaoX, float direcaoY,
                     float velocidade, List<Alvo> alvos, Object collisionLock,
                     int larguraTela, int alturaTela, com.autotarget.engine.Jogo jogo,
-                    com.autotarget.model.Lado lado, Alvo alvoReservado) {
+                    com.autotarget.model.Lado lado, Alvo alvoReservado,
+                    com.autotarget.model.Canhao owner) {
         this.x = x;
         this.y = y;
         this.direcaoX = direcaoX;
@@ -124,7 +127,17 @@ public class Projetil extends Thread {
         this.jogo = jogo;
         this.lado = lado;
         this.alvoReservado = alvoReservado;
+        this.owner = owner;
         this.ativo = true;
+    }
+
+    // Compatibilidade: construtor antigo sem owner
+    public Projetil(float x, float y, float direcaoX, float direcaoY,
+                    float velocidade, List<Alvo> alvos, Object collisionLock,
+                    int larguraTela, int alturaTela, com.autotarget.engine.Jogo jogo,
+                    com.autotarget.model.Lado lado, Alvo alvoReservado) {
+        this(x, y, direcaoX, direcaoY, velocidade, alvos, collisionLock,
+                larguraTela, alturaTela, jogo, lado, alvoReservado, null);
     }
 
     // ── Thread ───────────────────────────────────────────────────
@@ -138,6 +151,7 @@ public class Projetil extends Thread {
                     ativo = false;
                     // Tiro ERROU — liberar reserva para outro canhão tentar
                     jogo.liberarAlvo(alvoReservado);
+                    if (owner != null) owner.onProjetilFinished(this);
                     break;
                 }
                 verificarColisoes();
@@ -146,6 +160,7 @@ public class Projetil extends Thread {
                 Thread.currentThread().interrupt();
                 ativo = false;
                 jogo.liberarAlvo(alvoReservado);
+                if (owner != null) owner.onProjetilFinished(this);
             }
         }
     }
@@ -193,6 +208,7 @@ public class Projetil extends Thread {
                     this.ativo = false;
                     // Tiro ACERTOU — limpar reserva (alvo destruído)
                     jogo.liberarAlvo(alvo);
+                    if (owner != null) owner.onProjetilFinished(this);
                     // Log de acerto para auditoria
                     ReconciliationLog.getInstance().logShot(
                             this.x, this.y, alvo.getX(), alvo.getY(),

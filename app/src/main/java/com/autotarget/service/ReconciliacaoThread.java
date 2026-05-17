@@ -8,6 +8,7 @@ import com.autotarget.model.Lado;
 import com.autotarget.util.DataReconciliation;
 import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ReconciliationLog;
+import com.autotarget.util.ReconciliationVisualizer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +41,10 @@ public class ReconciliacaoThread extends Thread {
     private volatile int larguraTela;
     private volatile int alturaTela;
     private OnReconciliacaoListener listener;
+
+    private OnReconciliacaoListener getListener() {
+        return listener;
+    }
 
     public interface OnReconciliacaoListener {
         void onReconciliacaoConcluida(int totalReconciliacoes);
@@ -113,9 +118,8 @@ public class ReconciliacaoThread extends Thread {
 
             if (reconciliacoesNoCiclo > 0) {
                 reconciliacoesRealizadas += reconciliacoesNoCiclo;
-                if (listener != null) {
-                    listener.onReconciliacaoConcluida(reconciliacoesRealizadas);
-                }
+                OnReconciliacaoListener l = getListener();
+                if (l != null) l.onReconciliacaoConcluida(reconciliacoesRealizadas);
             }
         } catch (Exception e) {
             Log.e(TAG, "Erro na reconciliação", e);
@@ -123,25 +127,10 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private boolean executarReconciliacaoPorLado(Lado lado) {
-        if (sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
-            Log.d(TAG, "Pulando reconciliação: histórico insuficiente para lado " + lado.name());
-            return false;
-        }
-
-        List<Canhao> canhoesLado = new ArrayList<>();
-        List<Canhao> origem = lado == Lado.ESQUERDO ? jogo.getCanhoesEsquerdo() : jogo.getCanhoesDireito();
-            for (Canhao c : origem) {
-                if (c.isAtivo()) canhoesLado.add(c);
-            }
-        if (canhoesLado.isEmpty()) return false;
-
+        List<Canhao> canhoesLado = coletarCanhoesAtivos(lado);
         float[][] mediaD = sensorThread.getMediaDistancias(lado);
         float[][] varD = sensorThread.getVarianciaDistancias(lado);
-        if (mediaD == null || varD == null || mediaD.length == 0 || mediaD[0].length == 0) return false;
-        if (mediaD[0].length != canhoesLado.size()) {
-            Log.d(TAG, "Pulando reconciliação: tamanho de canhões mudou durante janela");
-            return false;
-        }
+        if (!validarPrecondicoesReconciliacao(lado, canhoesLado, mediaD, varD)) return false;
 
         int nCanhoes = canhoesLado.size();
         float[] canhoesX = new float[nCanhoes];
@@ -168,7 +157,8 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private void avaliarPressaoTatica(Lado lado) {
-        if (listener == null || larguraTela <= 0 || alturaTela <= 0) return;
+        OnReconciliacaoListener l = getListener();
+        if (l == null || larguraTela <= 0 || alturaTela <= 0) return;
 
         int nCanhoes = jogo.contarCanhoesAtivos(lado);
         int nAlvos = lado == Lado.ESQUERDO ? jogo.getAlvosEsquerdo().size() : jogo.getAlvosDireito().size();
@@ -187,7 +177,7 @@ public class ReconciliacaoThread extends Thread {
                 ReconciliationLog.getInstance().logAIDecision(
                         "ADICIONAR", "Pressão tática " + lado.name() + " (ratio=" + String.format(Locale.US, "%.2f", ratio) + ")",
                         novoX, novoY, 0, 0);
-                listener.onSugestaoAdicionarCanhao(lado, novoX, novoY);
+                l.onSugestaoAdicionarCanhao(lado, novoX, novoY);
             }
         }
 
@@ -221,25 +211,58 @@ public class ReconciliacaoThread extends Thread {
         return null;
     }
 
+    private List<Canhao> coletarCanhoesAtivos(Lado lado) {
+        java.util.List<Canhao> origem = lado == Lado.ESQUERDO ? jogo.getCanhoesEsquerdo() : jogo.getCanhoesDireito();
+        List<Canhao> canhoes = new ArrayList<>(Math.max(4, origem.size()));
+        for (Canhao c : origem) {
+            if (c != null && c.isAtivo()) canhoes.add(c);
+        }
+        return canhoes;
+    }
+
+    private boolean validarPrecondicoesReconciliacao(Lado lado,
+                                                     List<Canhao> canhoesLado,
+                                                     float[][] mediaD,
+                                                     float[][] varD) {
+        if (sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
+            Log.d(TAG, "Pulando reconciliação: histórico insuficiente para lado " + lado.name());
+            return false;
+        }
+        if (canhoesLado == null || canhoesLado.isEmpty()) return false;
+        if (mediaD == null || varD == null || mediaD.length == 0 || mediaD[0].length == 0) return false;
+        if (mediaD[0].length != canhoesLado.size()) {
+            Log.d(TAG, "Pulando reconciliação: tamanho de canhões mudou durante janela");
+            return false;
+        }
+        return true;
+    }
+
     private float calcularPosicaoEstrategica(Lado lado, int canhoesExistentes) {
         float[] colunas = lado == Lado.DIREITO
                 ? new float[]{0.6f, 0.75f, 0.9f}
                 : new float[]{0.1f, 0.25f, 0.4f};
-        int idx = canhoesExistentes % colunas.length;
-        return larguraTela * colunas[idx];
+        return escolherCyclic(colunas, canhoesExistentes, larguraTela);
     }
 
     private float calcularAlturaEstrategica(int canhoesExistentes) {
         float[] alturas = {0.25f, 0.5f, 0.75f, 0.15f, 0.85f, 0.4f, 0.6f, 0.35f};
-        int idx = canhoesExistentes % alturas.length;
-        float y = alturaTela * alturas[idx];
+        float y = escolherCyclic(alturas, canhoesExistentes, alturaTela);
         return Math.max(90, Math.min(y, alturaTela - 90));
+    }
+
+    private float escolherCyclic(float[] ratios, int index, float escala) {
+        if (ratios == null || ratios.length == 0) return 0f;
+        int idx = Math.abs(index) % ratios.length;
+        return escala * ratios[idx];
     }
 
     private void avaliarCustoBeneficio(Lado lado,
                                        List<Canhao> canhoesLado,
                                        DataReconciliation.ReconciliationResult[] resultados) {
-        if (listener == null) return;
+        OnReconciliacaoListener l = getListener();
+        if (l == null) return;
+
+        com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
 
         int nLado = canhoesLado.size();
         if (nLado == 0) return;
@@ -247,7 +270,8 @@ public class ReconciliacaoThread extends Thread {
         List<float[]> distanciasLado = new ArrayList<>();
         List<DataReconciliation.ReconciliationResult> alvosLado = new ArrayList<>();
         for (DataReconciliation.ReconciliationResult r : resultados) {
-            if (Lado.determinar(r.x, larguraTela) == lado) {
+            if (r == null) continue;
+            if (geom.determineLado(r.x) == lado) {
                 distanciasLado.add(r.distanciasReconciliadas);
                 alvosLado.add(r);
             }
@@ -296,10 +320,10 @@ public class ReconciliacaoThread extends Thread {
             if (ganhoMarginal > LIMIAR_GANHO) {
                 float[] pos = calcularCentroidePonderado(lado, canhoesLado, alvosLado);
                 ReconciliationLog.getInstance().logAIDecision(
-                        "ADICIONAR",
-                        "Greedy " + lado.name() + " U(N+1)-U(N)=" + String.format(Locale.US, "%.3f", ganhoMarginal),
-                        pos[0], pos[1], uAtual, uMais1);
-                listener.onSugestaoAdicionarCanhao(lado, pos[0], pos[1]);
+                    "ADICIONAR",
+                    "Greedy " + lado.name() + " U(N+1)-U(N)=" + String.format(Locale.US, "%.3f", ganhoMarginal),
+                    pos[0], pos[1], uAtual, uMais1);
+                if (l != null) l.onSugestaoAdicionarCanhao(lado, pos[0], pos[1]);
                 return;
             }
         }
@@ -372,10 +396,13 @@ public class ReconciliacaoThread extends Thread {
                                  List<Canhao> canhoesLado,
                                  DataReconciliation.ReconciliationResult[] resultados) {
         if (canhoesLado.isEmpty()) return;
+        OnReconciliacaoListener l = getListener();
 
+        com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
         List<DataReconciliation.ReconciliationResult> alvosDoLado = new ArrayList<>();
         for (DataReconciliation.ReconciliationResult r : resultados) {
-            if (Lado.determinar(r.x, larguraTela) == lado) {
+            if (r == null) continue;
+            if (geom.determineLado(r.x) == lado) {
                 alvosDoLado.add(r);
             }
         }
@@ -430,8 +457,8 @@ public class ReconciliacaoThread extends Thread {
                                 + " ganho=" + String.format(Locale.US, "%.2f", ganhoEsperado),
                         clamped[0], clamped[1], distanciaMediaAntes, distanciaMediaDepois);
                 canhao.moverPara(clamped[0], clamped[1]);
-                if (listener != null) {
-                    listener.onRealocarCanhao(canhao, clamped[0], clamped[1]);
+                if (l != null) {
+                    l.onRealocarCanhao(canhao, clamped[0], clamped[1]);
                 }
             }
         }
@@ -460,18 +487,19 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private void semearCanhoesIniciais(Lado lado) {
-        if (listener == null || larguraTela <= 0 || alturaTela <= 0) return;
+        OnReconciliacaoListener l = getListener();
+        if (l == null || larguraTela <= 0 || alturaTela <= 0) return;
         float energia = jogo.getEnergia(lado);
         if (energia < 5f) return;
 
         float x1 = lado == Lado.DIREITO ? larguraTela * 0.75f : larguraTela * 0.25f;
         float y1 = alturaTela * 0.3f;
-        listener.onSugestaoAdicionarCanhao(lado, x1, y1);
+        l.onSugestaoAdicionarCanhao(lado, x1, y1);
 
         if (energia > 10f) {
             float x2 = lado == Lado.DIREITO ? larguraTela * 0.65f : larguraTela * 0.35f;
             float y2 = alturaTela * 0.7f;
-            listener.onSugestaoAdicionarCanhao(lado, x2, y2);
+            l.onSugestaoAdicionarCanhao(lado, x2, y2);
         }
     }
 
@@ -484,9 +512,25 @@ public class ReconciliacaoThread extends Thread {
             Lado lado) {
 
         boolean usouEJML = (nCanhoes >= 4);
+        double somaErroAntes = 0, somaErroDepois = 0, somaReducao = 0;
+        
         for (int i = 0; i < resultados.length; i++) {
             DataReconciliation.ReconciliationResult r = resultados[i];
+            if (r == null) continue;
             float[] brutas = (i < mediaD.length) ? mediaD[i] : new float[0];
+
+            // Calcular erro RMS para este alvo
+            double[] erros = DataReconciliation.calcularErroRMS(
+                    floatArrayToDouble(brutas),
+                    floatArrayToDouble(r.distanciasReconciliadas)
+            );
+            somaErroAntes += erros[0];
+            somaErroDepois += erros[1];
+            somaReducao += erros[2];
+
+            // Registrar para visualização em dashboard/relatório
+            ReconciliationVisualizer.registrarPonto(i, brutas, r.distanciasReconciliadas,
+                    erros[0], erros[1], erros[2], nCanhoes, lado.name());
 
             float realX = r.x;
             float realY = r.y;
@@ -503,12 +547,40 @@ public class ReconciliacaoThread extends Thread {
                     canhoesX, canhoesY,
                     r.normA_yHat, usouEJML, lado.name());
         }
+        
+        // Log estruturado com métrica de erro
+        if (resultados.length > 0) {
+            double mediaReducao = somaReducao / resultados.length;
+            Log.i(TAG, String.format(Locale.US,
+                    "RECONCILIACAO_RMS lado=%s, alvos=%d, erroAntes=%.2f, erroDepois=%.2f, reducao=%.1f%%",
+                    lado.name(), resultados.length, 
+                    somaErroAntes / resultados.length,
+                    somaErroDepois / resultados.length,
+                    mediaReducao));
+            
+            // Log estruturado para profiling/plotter
+            Log.i("AUTOTARGET_METRICS", String.format(Locale.US,
+                    "Lado:%s,Alvos:%d,ErroRMS_Antes:%.2f,ErroRMS_Depois:%.2f,Reducao:%.1f%%",
+                    lado.name(), resultados.length,
+                    somaErroAntes / resultados.length,
+                    somaErroDepois / resultados.length,
+                    mediaReducao));
+        }
+    }
+
+    private double[] floatArrayToDouble(float[] arr) {
+        if (arr == null) return new double[0];
+        double[] result = new double[arr.length];
+        for (int i = 0; i < arr.length; i++) result[i] = arr[i];
+        return result;
     }
 
     public int getReconciliacoesRealizadas() { return reconciliacoesRealizadas; }
     public void setAtivo(boolean ativo) { this.ativo = ativo; }
     public boolean isAtivo() { return ativo; }
-    public void setListener(OnReconciliacaoListener listener) { this.listener = listener; }
+    public void setListener(OnReconciliacaoListener listener) {
+        this.listener = listener;
+    }
     public void setLarguraTela(int largura) { this.larguraTela = largura; }
     public void setAlturaTela(int altura) { this.alturaTela = altura; }
 }

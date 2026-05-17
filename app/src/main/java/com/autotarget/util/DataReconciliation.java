@@ -65,6 +65,28 @@ public class DataReconciliation {
     }
 
     /**
+     * Inverte a matriz sem utilizar blocos try/catch (evitando criação custosa de StackTrace
+     * em sistemas de tempo real).
+     *
+     * @param mat a matriz a inverter
+     * @param allowPseudoInverse fallback para pseudo-inversa em caso de singularidade
+     * @return matriz invertida
+     */
+    private static SimpleMatrix safeInvert(SimpleMatrix mat, boolean allowPseudoInverse) {
+        org.ejml.interfaces.linsol.LinearSolverDense<org.ejml.data.DMatrixRMaj> solver =
+                org.ejml.dense.row.factory.LinearSolverFactory_DDRM.linear(mat.getNumRows());
+        if (solver.setA(mat.getMatrix())) {
+            org.ejml.data.DMatrixRMaj inv = new org.ejml.data.DMatrixRMaj(mat.getNumRows(), mat.getNumCols());
+            solver.invert(inv);
+            return new SimpleMatrix(inv);
+        }
+        if (allowPseudoInverse) {
+            return mat.pseudoInverse();
+        }
+        throw new SingularMatrixException("Matriz singular - fallback desabilitado.");
+    }
+
+    /**
      * Executa reconciliação completa para todos os alvos.
      *
      * @param canhoesX       posições X dos canhões (N)
@@ -142,9 +164,12 @@ public class DataReconciliation {
         } catch (SingularMatrixException e) {
             Log.e(TAG, "Singularidade matricial na reconciliação", e);
             return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
+        } catch (OutOfMemoryError e) {
+            Log.e(TAG, "Memória insuficiente para reconciliação", e);
+            throw e;
         } catch (Exception e) {
             Log.e(TAG, "Erro na reconciliação EJML", e);
-            return null;
+            return new ReconciliationResult[0];
         }
     }
 
@@ -223,21 +248,11 @@ public class DataReconciliation {
         // ── Passo 7: Posição WLS (Mínimos Quadrados Ponderados) ──
         // [X̂, Ŷ]ᵀ = (MᵀWM)⁻¹MᵀW·ŷ
         SimpleMatrix matV = new SimpleMatrix(V_arr);
-        SimpleMatrix W;
-        try {
-            W = matV.invert();
-        } catch (SingularMatrixException e) {
-            W = matV.pseudoInverse();
-        }
+        SimpleMatrix W = safeInvert(matV, true);
 
         SimpleMatrix Mt = matM.transpose();
         SimpleMatrix MtWM = Mt.mult(W).mult(matM);
-        SimpleMatrix MtWM_inv;
-        try {
-            MtWM_inv = MtWM.invert();
-        } catch (SingularMatrixException e) {
-            MtWM_inv = MtWM.pseudoInverse();
-        }
+        SimpleMatrix MtWM_inv = safeInvert(MtWM, true);
 
         SimpleMatrix theta = MtWM_inv.mult(Mt).mult(W).mult(yHat);
         float xHat = (float) theta.get(0, 0) + offsetX;
@@ -273,12 +288,7 @@ public class DataReconciliation {
         SimpleMatrix At = matA.transpose();
         SimpleMatrix AVAt = matA.mult(matV).mult(At);
 
-        SimpleMatrix AVAt_inv;
-        try {
-            AVAt_inv = AVAt.invert();
-        } catch (SingularMatrixException e) {
-            AVAt_inv = AVAt.pseudoInverse();
-        }
+        SimpleMatrix AVAt_inv = safeInvert(AVAt, true);
 
         SimpleMatrix correction = matV.mult(At).mult(AVAt_inv).mult(matA).mult(matY);
         SimpleMatrix yHat = matY.minus(correction);
@@ -288,6 +298,32 @@ public class DataReconciliation {
             result[i] = yHat.get(i, 0);
         }
         return result;
+    }
+
+    /**
+     * Calcula erro RMS antes e depois da reconciliação.
+     * Retorna array: [erroAntes, erroDepois, reducaoPercentual]
+     *
+     * @param y vetor bruto
+     * @param yHat vetor reconciliado
+     * @return [erroAntes, erroDepois, reducaoPercentual]
+     */
+    public static double[] calcularErroRMS(double[] y, double[] yHat) {
+        if (y == null || yHat == null || y.length == 0) {
+            return new double[] {0, 0, 0};
+        }
+
+        double somaY2 = 0, somaYHat2 = 0;
+        for (int i = 0; i < y.length; i++) {
+            somaY2 += y[i] * y[i];
+            somaYHat2 += yHat[i] * yHat[i];
+        }
+
+        double erroAntes = Math.sqrt(somaY2);
+        double erroDepois = Math.sqrt(somaYHat2);
+        double reducao = (erroAntes > 0) ? (1.0 - erroDepois / erroAntes) * 100.0 : 0;
+
+        return new double[] {erroAntes, erroDepois, reducao};
     }
 
     private static double calcularLimiarGeometrico(float[] mediaDistancias, double fator) {
@@ -345,10 +381,28 @@ public class DataReconciliation {
      * Retorna matriz C de dimensão (N-3)×N.
      */
     private SimpleMatrix computeLeftNullSpace(SimpleMatrix M, int N) {
+        // Simple cache: se M não mudou, reutiliza C calculada previamente
+        try {
+            if (M == null) return null;
+        } catch (Exception ignored) {}
+        if (cachedC != null && cachedN == N) {
+            double h = 0;
+            for (int r = 0; r < M.getNumRows(); r++) {
+                for (int c = 0; c < M.getNumCols(); c++) {
+                    h = h * 31 + M.get(r, c);
+                }
+            }
+            if (Double.compare(h, cachedMatMHash) == 0) {
+                return cachedC;
+            }
+        }
         try {
             // SVD: M = U·S·Vᵀ
             // Espaço nulo esquerdo = últimas (N-rank) colunas de U
+            long svdStart = System.nanoTime();
             org.ejml.simple.SimpleSVD<SimpleMatrix> svd = M.svd();
+            long svdElapsedMs = (System.nanoTime() - svdStart) / 1_000_000;
+            Log.i("AUTOTARGET_METRICS_SVD", "SVD duration ms=" + svdElapsedMs + " rows=" + M.getNumRows() + " cols=" + M.getNumCols());
             SimpleMatrix U = svd.getU();
 
             int rank = 0;
@@ -368,12 +422,28 @@ public class DataReconciliation {
                 }
             }
 
+            // Atualizar cache (hash simples da matriz M)
+            double h = 0;
+            for (int r = 0; r < M.getNumRows(); r++) {
+                for (int c = 0; c < M.getNumCols(); c++) {
+                    h = h * 31 + M.get(r, c);
+                }
+            }
+            cachedC = C;
+            cachedMatMHash = h;
+            cachedN = N;
+
             return C;
         } catch (Exception e) {
             Log.e(TAG, "Erro ao calcular espaço nulo", e);
             return null;
         }
     }
+
+    // Cache sencillo para evitar SVD repetido quando a geometria não muda
+    private transient SimpleMatrix cachedC = null;
+    private transient double cachedMatMHash = Double.NaN;
+    private transient int cachedN = -1;
 
     /**
      * Fallback: estimar posições diretamente via OLS quando N<4.
@@ -398,7 +468,8 @@ public class DataReconciliation {
         SimpleMatrix Mt = matM.transpose();
         SimpleMatrix solver;
         try {
-            solver = Mt.mult(matM).invert().mult(Mt);
+            SimpleMatrix MtM_inv = safeInvert(Mt.mult(matM), false);
+            solver = MtM_inv.mult(Mt);
         } catch (SingularMatrixException e) {
             Log.e(TAG, "Canhões colineares — impossível estimar posição", e);
             return new ReconciliationResult[0];

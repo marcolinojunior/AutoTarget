@@ -151,6 +151,7 @@ public class Canhao extends Thread {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 ativo = false;
+                break;
             }
         }
     }
@@ -164,14 +165,27 @@ public class Canhao extends Thread {
         if (alvoReservado == null) {
             return; // Nenhum alvo livre disponível
         }
+        // Verificar se alvo ainda ativo logo após reserva
+        if (!alvoReservado.isAtivo()) {
+            jogo.liberarAlvo(alvoReservado);
+            return;
+        }
+
+        // Snapshot instantâneo (Defesa contra TOCTOU - Audit 2.3)
+        float tX = alvoReservado.getX();
+        float tY = alvoReservado.getY();
+        float tVel = alvoReservado.getVelocidade();
+        float tDirX = alvoReservado.getDirecaoX();
+        float tDirY = alvoReservado.getDirecaoY();
+
+        // Verificação dupla: se alvo foi destruído enquanto líamos, aborta
+        if (!alvoReservado.isAtivo()) {
+            jogo.liberarAlvo(alvoReservado);
+            return;
+        }
+
         boolean disparoEfetivado = false;
         try {
-            // Dados do "sensor" (estado atual do alvo)
-            float tX = alvoReservado.getX();
-            float tY = alvoReservado.getY();
-            float tVel = alvoReservado.getVelocidade();
-            float tDirX = alvoReservado.getDirecaoX();
-            float tDirY = alvoReservado.getDirecaoY();
 
             // Velocidade do alvo em pixels/ms (alvo atualiza a cada 30ms)
             float vTargetX = (tDirX * tVel) / 30f;
@@ -227,12 +241,12 @@ public class Canhao extends Thread {
                 this.angulo = 0f;
             }
 
-            Projetil projetil = new Projetil(
+                Projetil projetil = new Projetil(
                     this.x, this.y, dirX, dirY,
                     VELOCIDADE_PROJETIL, alvos, collisionLock,
                     larguraTela, alturaTela, jogo, this.lado,
-                    alvoReservado
-            );
+                    alvoReservado, this
+                );
             synchronized (projeteis) {
                 projeteis.add(projetil);
             }
@@ -253,6 +267,17 @@ public class Canhao extends Thread {
     private void limparProjetisInativos() {
         synchronized (projeteis) {
             projeteis.removeIf(p -> !p.isAtivo());
+        }
+    }
+
+    /**
+     * Callback chamada por um Projetil quando ele finaliza (hit ou fora da tela)
+     * para que seja removido imediatamente da lista de projéteis.
+     */
+    public void onProjetilFinished(Projetil p) {
+        if (p == null) return;
+        synchronized (projeteis) {
+            projeteis.remove(p);
         }
     }
 
@@ -355,10 +380,13 @@ public class Canhao extends Thread {
      * @param novoY coordenada Y do toque
      */
     public void setPosicao(float novoX, float novoY) {
-        this.x = novoX;
-        this.y = novoY;
-        this.targetX = novoX;
-        this.targetY = novoY;
+        // Validação de bounds para evitar canhão fora da tela
+        float clampedX = Math.max(0f, Math.min(novoX, larguraTela));
+        float clampedY = Math.max(0f, Math.min(novoY, alturaTela));
+        this.x = clampedX;
+        this.y = clampedY;
+        this.targetX = this.x;
+        this.targetY = this.y;
         this.movendo = false;
     }
 

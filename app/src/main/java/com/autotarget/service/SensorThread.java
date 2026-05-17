@@ -32,15 +32,17 @@ import android.util.Log;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
+import com.autotarget.engine.GameGeometry;
 import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ReconciliationLog;
+import com.autotarget.util.SensorStatisticsTracker;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Thread dedicada para coleta simulada de dados de sensores.
@@ -83,8 +85,7 @@ public class SensorThread extends Thread {
     /** Proporção de ruído (5% do valor real). */
     private static final double PROPORCAO_RUIDO = 0.05;
 
-    /** Ruído simulado nos sensores. */
-    private final Random ruido = new Random();
+    /** Ruído simulado nos sensores via ThreadLocalRandom. */
 
     private static class SideSensorData {
         float[] leiturasPosX = new float[0];
@@ -163,9 +164,10 @@ public class SensorThread extends Thread {
             }
 
             int larguraTela = Math.max(jogo.getLarguraTela(), 1);
+            GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, jogo.getAlturaTela());
             for (Alvo alvo : alvosAtuais) {
                 if (!alvo.isAtivo()) continue;
-                Lado lado = Lado.determinar(alvo.getX(), larguraTela);
+                Lado lado = geom.determineLado(alvo.getX());
                 snapshotsPorLado.get(lado).alvosAtivos.add(alvo);
             }
 
@@ -249,7 +251,7 @@ public class SensorThread extends Thread {
 
     private float aplicarRuidoProporcional(float valorReal) {
         float escala = Math.max(Math.abs(valorReal), 1f);
-        float ruidoGaussiano = (float) (ruido.nextGaussian() * PROPORCAO_RUIDO * escala);
+        float ruidoGaussiano = (float) (ThreadLocalRandom.current().nextGaussian() * PROPORCAO_RUIDO * escala);
         return valorReal + ruidoGaussiano;
     }
 
@@ -307,6 +309,16 @@ public class SensorThread extends Thread {
         int historico = getHistoricoCount(lado);
         ReconciliationLog.getInstance().logSensorStats(
                 lado.name(), snap.alvosAtivos.size(), historico, mediaX, varX, mediaV, varV);
+        
+        // Registrar para visualização em dashboard
+        float[] distancias = new float[snap.leiturasPosX.length];
+        for (int i = 0; i < snap.leiturasPosX.length; i++) {
+            distancias[i] = snap.leiturasPosX[i];
+        }
+        SensorStatisticsTracker.registrarEstatisticas(
+                snap.alvosAtivos.size(),
+                lado.name(),
+                distancias);
     }
 
     private double media(float[] valores) {

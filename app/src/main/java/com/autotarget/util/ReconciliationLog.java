@@ -23,12 +23,12 @@ public final class ReconciliationLog {
     private int totalAdditions;
     private int totalRemovals;
 
-    private static final class ReconSample {
-        final double mseBruto;
-        final double mseRecon;
-        final double erroPos;
-        final double normA;
-        final String lado;
+    public static final class ReconSample {
+        public final double mseBruto;
+        public final double mseRecon;
+        public final double erroPos;
+        public final double normA;
+        public final String lado;
 
         ReconSample(double mseBruto, double mseRecon, double erroPos, double normA, String lado) {
             this.mseBruto = mseBruto;
@@ -60,13 +60,13 @@ public final class ReconciliationLog {
         }
     }
 
-    private static final class EnergyPenaltySample {
-        final float energiaEsq;
-        final float energiaDir;
-        final int canhoesEsq;
-        final int canhoesDir;
-        final double intervaloEsqMs;
-        final double intervaloDirMs;
+    public static final class EnergyPenaltySample {
+        public final float energiaEsq;
+        public final float energiaDir;
+        public final int canhoesEsq;
+        public final int canhoesDir;
+        public final double intervaloEsqMs;
+        public final double intervaloDirMs;
 
         EnergyPenaltySample(float energiaEsq, float energiaDir, int canhoesEsq, int canhoesDir,
                             double intervaloEsqMs, double intervaloDirMs) {
@@ -83,6 +83,14 @@ public final class ReconciliationLog {
 
     public static ReconciliationLog getInstance() {
         return INSTANCE;
+    }
+
+    public synchronized List<ReconSample> getReconSamples() {
+        return new ArrayList<>(reconSamples);
+    }
+
+    public synchronized List<EnergyPenaltySample> getEnergySamples() {
+        return new ArrayList<>(energySamples);
     }
 
     public synchronized void reset() {

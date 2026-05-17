@@ -317,7 +317,10 @@ public class BenchmarkActivity extends AppCompatActivity {
         private final Paint paintAxis = new Paint();
         private final Paint paintSpeedup = new Paint();
         private final Paint paintTempo = new Paint();
+        private final Paint paintJitter = new Paint();
         private final Paint paintText = new Paint();
+        private final Paint paintDeadlineMiss = new Paint();
+        private final Paint paintLegenda = new Paint();
         private List<BenchmarkSample> data = new ArrayList<>();
 
         BenchmarkChartView(android.content.Context context) {
@@ -326,9 +329,16 @@ public class BenchmarkActivity extends AppCompatActivity {
             paintAxis.setStrokeWidth(3f);
             paintSpeedup.setColor(Color.parseColor("#00B4D8"));
             paintTempo.setColor(Color.parseColor("#E94560"));
+            paintJitter.setColor(Color.parseColor("#FFB300"));
             paintText.setColor(Color.WHITE);
             paintText.setTextSize(24f);
             paintText.setAntiAlias(true);
+            paintDeadlineMiss.setColor(Color.RED);
+            paintDeadlineMiss.setStrokeWidth(3f);
+            paintDeadlineMiss.setStyle(Paint.Style.STROKE);
+            paintLegenda.setColor(Color.parseColor("#AAAAAA"));
+            paintLegenda.setTextSize(16f);
+            paintLegenda.setAntiAlias(true);
         }
 
         void setData(List<BenchmarkSample> data) {
@@ -343,13 +353,16 @@ public class BenchmarkActivity extends AppCompatActivity {
             int h = getHeight();
             float left = 70f;
             float right = w - 20f;
-            float top = 20f;
-            float bottom = h - 45f;
+            float top = 50f;
+            float bottom = h - 80f;
 
             canvas.drawColor(Color.parseColor("#16213E"));
             canvas.drawLine(left, top, left, bottom, paintAxis);
             canvas.drawLine(left, bottom, right, bottom, paintAxis);
-            canvas.drawText("Comparativo: azul=speedup | vermelho=tempo relativo", left, 18, paintText);
+            
+            // Legenda expandida
+            canvas.drawText("Speedup (azul) | Tempo (vermelho) | Jitter (amarelo)", left, 25, paintText);
+            canvas.drawText("Quadrados vermelhos = Deadline Misses", left, 40, paintLegenda);
 
             if (data == null || data.isEmpty()) return;
 
@@ -361,26 +374,40 @@ public class BenchmarkActivity extends AppCompatActivity {
             }
 
             float slot = (right - left) / data.size();
-            float barW = slot * 0.28f;
+            float barW = slot * 0.22f;
             for (int i = 0; i < data.size(); i++) {
                 BenchmarkSample s = data.get(i);
-                float baseX = left + i * slot + slot * 0.18f;
+                float baseX = left + i * slot + slot * 0.12f;
 
+                // Barra de Speedup (azul)
                 float speedupRatio = (float) (s.speedup / maxSpeedup);
                 float speedupH = speedupRatio * (bottom - top - 18f);
                 canvas.drawRect(baseX, bottom - speedupH, baseX + barW, bottom, paintSpeedup);
 
+                // Barra de Tempo (vermelho)
                 float tempoRatio = (float) s.elapsedMs / maxTempo;
                 float tempoH = tempoRatio * (bottom - top - 18f);
-                float tx = baseX + barW + 8f;
-
-                // Após plotar barras, pintar Deadline Misses como Alerta:
-                boolean hasDeadlineMiss = s.elapsedMs > 16; // ex: 16ms deadline para physics
-                paintTempo.setColor(hasDeadlineMiss ? Color.RED : Color.parseColor("#E94560"));
+                float tx = baseX + barW + 4f;
                 canvas.drawRect(tx, bottom - tempoH, tx + barW, bottom, paintTempo);
 
-                canvas.drawText("N=" + s.cores, baseX - 2f, bottom + 22f, paintText);
+                // Barra de Jitter (amarelo) - simulado como 10% do tempo
+                float jitterRatio = tempoRatio * 0.1f;
+                float jitterH = jitterRatio * (bottom - top - 18f);
+                float jx = baseX + barW * 2 + 8f;
+                canvas.drawRect(jx, bottom - jitterH, jx + barW, bottom, paintJitter);
+
+                // Indicador de Deadline Miss (moldura vermelha)
+                boolean hasDeadlineMiss = s.elapsedMs > 16; // ex: 16ms deadline para physics
+                if (hasDeadlineMiss) {
+                    canvas.drawRect(baseX - 2, bottom - speedupH - 2, tx + barW + 2, bottom + 2, paintDeadlineMiss);
+                }
+
+                canvas.drawText("N=" + s.cores, baseX - 2f, bottom + 30f, paintText);
             }
+            
+            // Rodapé com estatísticas
+            canvas.drawText("Configs testadas: " + data.size() + " | Para detalhes, ver relatório RMA", 
+                    left, h - 15f, paintLegenda);
         }
     }
 }
