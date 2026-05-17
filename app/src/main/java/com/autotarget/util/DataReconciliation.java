@@ -160,6 +160,47 @@ public class DataReconciliation {
         }
     }
 
+    /**
+     * Isola a projeção matemática pura L2 (Minimização via Left Null Space).
+     * Esta função testa puramente a teoria do filtro de minimização, e não sofre viés
+     * de heurísticas de restrição do ambiente (WLS).
+     */
+    public float[] calcularProjecaoMatricial(
+            int N, float[] canhoesX, float[] canhoesY,
+            float[] mediaDist, float[] varDist,
+            SimpleMatrix C) {
+
+        double[] y_arr = new double[N];
+        double[][] V_arr = new double[N][N];
+
+        for (int j = 0; j < N; j++) {
+            double dj = mediaDist[j];
+            double var_j = varDist[j];
+            double dj_sq = dj * dj;
+            double norm_j_sq = canhoesX[j] * canhoesX[j] + canhoesY[j] * canhoesY[j];
+            y_arr[j] = dj_sq - norm_j_sq;
+            V_arr[j][j] = Math.max(4.0 * dj_sq * var_j, 1e-6);
+        }
+
+        // Usa estritamente o espaço nulo matricial para provar a consistência estatística
+        double[][] A_arr = new double[C.getNumRows()][C.getNumCols()];
+        for (int r = 0; r < C.getNumRows(); r++) {
+            for (int c = 0; c < C.getNumCols(); c++) {
+                A_arr[r][c] = C.get(r, c);
+            }
+        }
+
+        double[] yHat_arr = reconcile(y_arr, V_arr, A_arr);
+        float[] distReconciliadas = new float[N];
+        for (int j = 0; j < N; j++) {
+            double norm_j_sq = canhoesX[j] * canhoesX[j] + canhoesY[j] * canhoesY[j];
+            double d_hat_sq = yHat_arr[j] + norm_j_sq;
+            if (d_hat_sq < 0) d_hat_sq = 0;
+            distReconciliadas[j] = (float) Math.sqrt(d_hat_sq);
+        }
+        return distReconciliadas;
+    }
+
     private ReconciliationResult reconciliarAlvo(
             int alvoIndex, int N,
             float[] canhoesX, float[] canhoesY,
@@ -388,7 +429,7 @@ public class DataReconciliation {
      * Calcula o espaço nulo esquerdo de M via SVD.
      * Retorna matriz C de dimensão (N-3)×N.
      */
-    private SimpleMatrix computeLeftNullSpace(SimpleMatrix M, int N) {
+    public SimpleMatrix computeLeftNullSpace(SimpleMatrix M, int N) {
         // Simple cache: se M não mudou, reutiliza C calculada previamente
         try {
             if (M == null) return null;
