@@ -170,9 +170,8 @@ public class Jogo {
     private final AtomicInteger pontuacaoDireito = new AtomicInteger(0);
 
     /** Energia de cada lado. */
-    private volatile float energiaEsquerdo;
-    private volatile float energiaDireito;
-    private final Object energiaLock = new Object();
+    private final com.autotarget.util.EnergyManager energyManagerEsquerdo;
+    private final com.autotarget.util.EnergyManager energyManagerDireito;
 
     private volatile int tempoRestante;
     private long timestampInicio;
@@ -244,8 +243,9 @@ public class Jogo {
         this.estado = Estado.PARADO;
         this.pontuacaoEsquerdo.set(0);
         this.pontuacaoDireito.set(0);
-        this.energiaEsquerdo = ENERGIA_MAXIMA;
-        this.energiaDireito = ENERGIA_MAXIMA;
+        // FIX: Vulnerabilidade TOCTOU na Gestão de Energia (Uso exclusivo do EnergyManager)
+        this.energyManagerEsquerdo = new com.autotarget.util.EnergyManager(ENERGIA_MAXIMA, ENERGIA_MAXIMA);
+        this.energyManagerDireito = new com.autotarget.util.EnergyManager(ENERGIA_MAXIMA, ENERGIA_MAXIMA);
         this.tempoRestante = DURACAO_PARTIDA_SEGUNDOS;
         this.reconciliacoesRealizadas = 0;
         this.dataReconciliation = new DataReconciliation();
@@ -268,8 +268,9 @@ public class Jogo {
         estado = Estado.RODANDO;
         pontuacaoEsquerdo.set(0);
         pontuacaoDireito.set(0);
-        energiaEsquerdo = ENERGIA_MAXIMA;
-        energiaDireito = ENERGIA_MAXIMA;
+        // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+        energyManagerEsquerdo.set(ENERGIA_MAXIMA);
+        energyManagerDireito.set(ENERGIA_MAXIMA);
         tempoRestante = DURACAO_PARTIDA_SEGUNDOS;
         reconciliacoesRealizadas = 0;
         timestampInicio = System.currentTimeMillis();
@@ -355,10 +356,9 @@ public class Jogo {
             @Override
             public void onReconciliacaoConcluida(int totalRec) {
                 reconciliacoesRealizadas = totalRec;
-                synchronized (energiaLock) {
-                    energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + 10f);
-                    energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + 10f);
-                }
+                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+                energyManagerEsquerdo.add(10f);
+                energyManagerDireito.add(10f);
                 notificarEnergia();
             }
             @Override
@@ -467,19 +467,18 @@ public class Jogo {
         for (Canhao c : canhoesDireito) {
             if (c.isAtivo()) canhoesDir++;
         }
-        synchronized (energiaLock) {
-            energiaEsquerdo = Math.max(0f, energiaEsquerdo - canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
-            energiaDireito = Math.max(0f, energiaDireito - canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
+        // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+        energyManagerEsquerdo.remove(canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
+        energyManagerDireito.remove(canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
 
-            // Se energia de um lado acabou, desativar último canhão desse lado
-            if (energiaEsquerdo <= 0f && canhoesEsq > 0) {
-                desativarUltimoCanhao(Lado.ESQUERDO);
-                energiaEsquerdo = 0f;
-            }
-            if (energiaDireito <= 0f && canhoesDir > 0) {
-                desativarUltimoCanhao(Lado.DIREITO);
-                energiaDireito = 0f;
-            }
+        // Se energia de um lado acabou, desativar último canhão desse lado
+        if (energyManagerEsquerdo.get() <= 0f && canhoesEsq > 0) {
+            desativarUltimoCanhao(Lado.ESQUERDO);
+            energyManagerEsquerdo.set(0f);
+        }
+        if (energyManagerDireito.get() <= 0f && canhoesDir > 0) {
+            desativarUltimoCanhao(Lado.DIREITO);
+            energyManagerDireito.set(0f);
         }
     }
 
@@ -490,10 +489,10 @@ public class Jogo {
         double intervaloEsq = calcularIntervaloMedio(canhoesEsquerdo);
         double intervaloDir = calcularIntervaloMedio(canhoesDireito);
 
-        Log.i("Autotarget-Plotter", "EnergiaEsq:" + energiaEsquerdo + ",EnergiaDir:" + energiaDireito + ",Intervalo:" + intervaloEsq);
+        Log.i("Autotarget-Plotter", "EnergiaEsq:" + energyManagerEsquerdo.get() + ",EnergiaDir:" + energyManagerDireito.get() + ",Intervalo:" + intervaloEsq);
 
         ReconciliationLog.getInstance().logEnergyPenalty(
-                energiaEsquerdo, energiaDireito, canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
+                energyManagerEsquerdo.get(), energyManagerDireito.get(), canhoesEsq, canhoesDir, intervaloEsq, intervaloDir);
     }
 
     private double calcularIntervaloMedio(CopyOnWriteArrayList<Canhao> canhoes) {
@@ -563,9 +562,17 @@ public class Jogo {
      * @return energia atual
      */
     public float getEnergia(Lado lado) {
-        synchronized (energiaLock) {
-            return (lado == Lado.ESQUERDO) ? energiaEsquerdo : energiaDireito;
-        }
+        // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+        return (lado == Lado.ESQUERDO) ? energyManagerEsquerdo.get() : energyManagerDireito.get();
+    }
+
+    /**
+     * Retorna o gerenciador de energia para um dado lado.
+     * @param lado o lado a consultar
+     * @return EnergyManager associado ao lado
+     */
+    public com.autotarget.util.EnergyManager getEnergyManager(Lado lado) {
+        return (lado == Lado.ESQUERDO) ? energyManagerEsquerdo : energyManagerDireito;
     }
 
     // ── Sistema de Reserva de Alvos (Coordenação de Disparos) ────
@@ -768,12 +775,13 @@ public class Jogo {
      */
     private void transferirAlvosCruzados() {
         if (larguraTela <= 0) return;
-        transferBufferDireita.clear();
-        transferBufferEsquerda.clear();
 
         com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
 
         synchronized (listLock) {
+            // FIX: Melhoria Técnica: Preemption Leak nos Buffers
+            transferBufferDireita.clear();
+            transferBufferEsquerda.clear();
             for (Alvo alvo : alvosEsquerdo) {
                 if (geom.determineLado(alvo.getX()) == Lado.DIREITO) {
                     transferBufferDireita.add(alvo);
@@ -807,13 +815,15 @@ public class Jogo {
         // Reconstruir QuadTree (Otimização AV4)
         if (useQuadTree && larguraTela > 0 && alturaTela > 0 && boundsEsquerdo != null) {
             synchronized (collisionLock) {
-                quadTreeEsquerdo = new QuadTree(0, boundsEsquerdo);
-                quadTreeDireito = new QuadTree(0, boundsDireito);
-                for (Alvo alvo : alvosEsquerdo) {
-                    if (alvo.isAtivo()) quadTreeEsquerdo.insert(alvo);
-                }
-                for (Alvo alvo : alvosDireito) {
-                    if (alvo.isAtivo()) quadTreeDireito.insert(alvo);
+                synchronized (listLock) {
+                    quadTreeEsquerdo = new QuadTree(0, boundsEsquerdo);
+                    quadTreeDireito = new QuadTree(0, boundsDireito);
+                    for (Alvo alvo : alvosEsquerdo) {
+                        if (alvo.isAtivo()) quadTreeEsquerdo.insert(alvo);
+                    }
+                    for (Alvo alvo : alvosDireito) {
+                        if (alvo.isAtivo()) quadTreeDireito.insert(alvo);
+                    }
                 }
             }
         } else {
@@ -823,11 +833,12 @@ public class Jogo {
 
         int destruidos = 0;
         synchronized (collisionLock) {
-            if (!alvosEsquerdo.isEmpty() || !alvosDireito.isEmpty()) {
-                // Removido synchronized(listLock) pois processarAlvosInativos itera e usa removeAll
-                // que já é seguro na CopyOnWriteArrayList, evitando concorrência excessiva (Audit 2.5)
-                destruidos += processarAlvosInativos(alvosEsquerdo, Lado.ESQUERDO);
-                destruidos += processarAlvosInativos(alvosDireito, Lado.DIREITO);
+            // FIX: Correção Crítica: Race Condition na Verificação de Colisões
+            synchronized (listLock) {
+                if (!alvosEsquerdo.isEmpty() || !alvosDireito.isEmpty()) {
+                    destruidos += processarAlvosInativos(alvosEsquerdo, Lado.ESQUERDO);
+                    destruidos += processarAlvosInativos(alvosDireito, Lado.DIREITO);
+                }
             }
         }
 
@@ -859,14 +870,12 @@ public class Jogo {
             lista.removeAll(removidos);
             if (lado == Lado.ESQUERDO) {
                 pontuacaoEsquerdo.addAndGet(pontos);
-                synchronized (energiaLock) {
-                    energiaEsquerdo = Math.min(ENERGIA_MAXIMA, energiaEsquerdo + energiaRegenerada);
-                }
+                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+                energyManagerEsquerdo.add(energiaRegenerada);
             } else {
                 pontuacaoDireito.addAndGet(pontos);
-                synchronized (energiaLock) {
-                    energiaDireito = Math.min(ENERGIA_MAXIMA, energiaDireito + energiaRegenerada);
-                }
+                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
+                energyManagerDireito.add(energiaRegenerada);
             }
         }
         return removidos.size();
@@ -988,7 +997,7 @@ public class Jogo {
     }
 
     private void notificarEnergia() {
-        if (listener != null) listener.onEnergiaAtualizada(energiaEsquerdo, energiaDireito);
+        if (listener != null) listener.onEnergiaAtualizada(energyManagerEsquerdo.get(), energyManagerDireito.get());
     }
 
     // ── Getters / Setters ────────────────────────────────────────
@@ -996,8 +1005,8 @@ public class Jogo {
     public Estado getEstado() { return estado; }
     public int getPontuacaoEsquerdo() { return pontuacaoEsquerdo.get(); }
     public int getPontuacaoDireito() { return pontuacaoDireito.get(); }
-    public float getEnergiaEsquerdo() { synchronized (energiaLock) { return energiaEsquerdo; } }
-    public float getEnergiaDireito() { synchronized (energiaLock) { return energiaDireito; } }
+    public float getEnergiaEsquerdo() { return energyManagerEsquerdo.get(); }
+    public float getEnergiaDireito() { return energyManagerDireito.get(); }
     public int getTempoRestante() { return tempoRestante; }
     /**
      * Retorna defensive copy da lista de alvos.
@@ -1045,7 +1054,7 @@ public class Jogo {
         
         Log.i("AUTOTARGET_DASHBOARD", String.format(Locale.US,
                 "Tempo:%d|EsqEnergia:%.0f|DirEnergia:%.0f|EsqCanhoes:%d|DirCanhoes:%d|EsqFator:%.2f|DirFator:%.2f|EsqPts:%d|DirPts:%d",
-                tempoRestante, energiaEsquerdo, energiaDireito,
+                tempoRestante, energyManagerEsquerdo.get(), energyManagerDireito.get(),
                 nCanhoesEsq, nCanhoeDir, fatorEsq, fatorDir,
                 pontuacaoEsquerdo.get(), pontuacaoDireito.get()));
     }

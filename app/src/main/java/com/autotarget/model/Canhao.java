@@ -87,6 +87,9 @@ public class Canhao extends Thread {
     /** Velocidade de movimento de realocação (pixels por frame). */
     private static final float VELOCIDADE_MOVIMENTO = 2.0f;
 
+    /** Custo de disparo de energia por cada disparo. */
+    private static final float CUSTO_DISPARO = 1.0f;
+
     /** Intervalo de disparo efetivo (pode ter penalidade). */
     private volatile int intervaloDisparo;
 
@@ -134,11 +137,12 @@ public class Canhao extends Thread {
                 int nAtivos = jogo.contarCanhoesAtivos(this.lado);
                 aplicarPenalidade(nAtivos);
 
+                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia (Uso exclusivo do EnergyManager)
                 // ── Fase 1: Verificar energia do lado ──
-                // Se a energia do lado chegou a 0, o canhão pausa disparos
-                // mas continua existindo (a thread não morre).
-                float energiaLado = jogo.getEnergia(this.lado);
-                if (energiaLado > 0) {
+                // Tenta remover o custo do disparo atomicamente. Se houver energia, dispara.
+                // Caso contrário, entra em stand-by preemptivo, sem deduzir a energia.
+                boolean hasEnergy = jogo.getEnergyManager(this.lado).tryRemove(CUSTO_DISPARO);
+                if (hasEnergy) {
                     disparar();
                 }
 
