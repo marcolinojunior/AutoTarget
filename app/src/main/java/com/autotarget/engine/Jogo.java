@@ -490,13 +490,13 @@ public class Jogo {
         energyManagerEsquerdo.remove(canhoesEsq * CUSTO_ENERGIA_POR_CANHAO);
         energyManagerDireito.remove(canhoesDir * CUSTO_ENERGIA_POR_CANHAO);
 
-        // Se energia de um lado acabou, desativar último canhão desse lado
+        // Se energia de um lado acabou, desativar todos os canhões desse lado
         if (energyManagerEsquerdo.get() <= 0f && canhoesEsq > 0) {
-            desativarUltimoCanhao(Lado.ESQUERDO);
+            desativarTodosCanhoes(Lado.ESQUERDO);
             energyManagerEsquerdo.set(0f);
         }
         if (energyManagerDireito.get() <= 0f && canhoesDir > 0) {
-            desativarUltimoCanhao(Lado.DIREITO);
+            desativarTodosCanhoes(Lado.DIREITO);
             energyManagerDireito.set(0f);
         }
     }
@@ -527,6 +527,29 @@ public class Jogo {
             }
         }
         return ativos == 0 ? 0 : (soma / ativos);
+    }
+
+    private void desativarTodosCanhoes(Lado lado) {
+        List<Canhao> lista = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
+        List<Canhao> canhoesParaParar = new ArrayList<>();
+        synchronized (canhoesLock) {
+            for (int i = 0; i < lista.size(); i++) {
+                Canhao c = lista.get(i);
+                if (c.isAtivo()) {
+                    canhoesParaParar.add(c);
+                }
+            }
+        }
+
+        // Atribuição atômica/imediata da flag de parada para todos os canhões simultaneamente
+        for (Canhao c : canhoesParaParar) {
+            c.setAtivo(false);
+        }
+
+        // Parar (join) os canhões fora do bloco synchronized para evitar deadlock
+        for (Canhao c : canhoesParaParar) {
+            pararCanhaoComJoin(c, 300);
+        }
     }
 
     private void desativarUltimoCanhao(Lado lado) {
