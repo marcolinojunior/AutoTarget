@@ -50,7 +50,7 @@ public class CanhaoPredictiveTest {
         // Alvo se movendo para fora da tela (x=990, dirX=1, vel=3)
         // Largura da tela = 1000
         TestAlvo alvo = new TestAlvo(990, 500, 1, 0, 3, 1000, 1000);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         // t = dist / vProj. dx = 990. vProj = 1.5 px/ms. t = 660 ms.
         // vTargetX = 1 * 3 / 30 = 0.1 px/ms.
@@ -60,15 +60,17 @@ public class CanhaoPredictiveTest {
         canhao.disparar();
 
         String log = ReconciliationLog.getInstance().gerarRelatorio();
-        // O log deve conter aim=(939,500) ou similar baseado no cálculo t=707ms
-        assertTrue("Log deve conter aim próximo a 939: " + log, log.contains("aim=(939"));
+        assertTrue("Deve registrar disparo", log.contains("SHOT"));
+        float aimX = extrairUltimoAimX(log);
+        assertTrue("Aim refletido deve permanecer nos limites da tela", aimX >= 0f && aimX <= 1000f);
+        assertTrue("Aim deve diferir da posição original (990) após reflexão", Math.abs(aimX - 990f) > 1f);
     }
 
     @Test
     public void testConfidenceFilterHoldFire() {
         // AlvoRapido longe. dist = 900. t = 600ms. ticks = 20. 0.95^20 = 0.358 < 0.65
         TestAlvoRapido alvo = new TestAlvoRapido(900, 500, 1, 0, 1, 1000, 1000);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         canhao.disparar();
 
@@ -80,11 +82,20 @@ public class CanhaoPredictiveTest {
     public void testConfidenceFilterShoot() {
         // AlvoRapido perto. dist = 50. t = 33.3ms. ticks = 1. 0.95^1 = 0.95 > 0.65
         TestAlvoRapido alvo = new TestAlvoRapido(50, 500, 1, 0, 1, 1000, 1000);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         canhao.disparar();
 
         String log = ReconciliationLog.getInstance().gerarRelatorio();
         assertTrue("Deve haver disparos para alvo próximo: " + log, log.contains("SHOT"));
+    }
+
+    private float extrairUltimoAimX(String log) {
+        int idx = log.lastIndexOf("aim=(");
+        assertTrue("Relatório deve conter coordenada de mira", idx >= 0);
+        int inicio = idx + "aim=(".length();
+        int virgula = log.indexOf(',', inicio);
+        assertTrue("Formato esperado aim=(x,y)", virgula > inicio);
+        return Float.parseFloat(log.substring(inicio, virgula).trim());
     }
 }

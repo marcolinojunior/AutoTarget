@@ -112,6 +112,8 @@ public class SensorThread extends Thread {
             float[] canhoesY;
             float vx, vy;
             float x, y; // posição ruidosa
+            float trueVx, trueVy;
+            float trueX, trueY;
         }
     }
 
@@ -146,14 +148,12 @@ public class SensorThread extends Thread {
 
         try {
             while (ativo) {
-                long startNs = System.nanoTime();
                 try {
+                    long startNs = System.nanoTime();
                     coletarDados();
-                    Thread.sleep(INTERVALO_COLETA);
-
-                    // Instrumentação RMA
-                    long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                    long elapsedMs = (System.nanoTime() - startNs) / 1_000_000; // tempo de execução sem sleep
                     RMAAnalysis.checkDeadline("T7-Sensor", elapsedMs, INTERVALO_COLETA);
+                    Thread.sleep(INTERVALO_COLETA);
 
                 } catch (InterruptedException e) {
                     Log.w(TAG, "SensorThread interrompida.");
@@ -183,17 +183,15 @@ public class SensorThread extends Thread {
             List<Alvo> alvosAtuais = jogo.getAllAlvos();
             List<Canhao> canhoesEsq = new ArrayList<>();
             List<Canhao> canhoesDir = new ArrayList<>();
-            synchronized(jogo.getCanhoesLock()) {
-                java.util.List<Canhao> listaEsq = jogo.getCanhoesEsquerdo();
-                for (int i = 0; i < listaEsq.size(); i++) {
-                    Canhao c = listaEsq.get(i);
-                    if (c.isAtivo()) canhoesEsq.add(c);
-                }
-                java.util.List<Canhao> listaDir = jogo.getCanhoesDireito();
-                for (int i = 0; i < listaDir.size(); i++) {
-                    Canhao c = listaDir.get(i);
-                    if (c.isAtivo()) canhoesDir.add(c);
-                }
+            java.util.List<Canhao> listaEsq = jogo.getCanhoesNoLadoSnapshot(Lado.ESQUERDO);
+            for (int i = 0; i < listaEsq.size(); i++) {
+                Canhao c = listaEsq.get(i);
+                if (c.isAtivo()) canhoesEsq.add(c);
+            }
+            java.util.List<Canhao> listaDir = jogo.getCanhoesNoLadoSnapshot(Lado.DIREITO);
+            for (int i = 0; i < listaDir.size(); i++) {
+                Canhao c = listaDir.get(i);
+                if (c.isAtivo()) canhoesDir.add(c);
             }
 
             int larguraTela = Math.max(jogo.getLarguraTela(), 1);
@@ -223,17 +221,19 @@ public class SensorThread extends Thread {
         }
     }
 
-    private static class SideSnapshot {
-        final List<Alvo> alvosAtivos = new ArrayList<>();
-        List<Canhao> canhoesAtivos = new ArrayList<>();
-        float[] leiturasPosX = new float[0];
-        float[] leiturasPosY = new float[0];
-        float[] leiturasVelocidade = new float[0];
-        float[] leiturasVelocidadeX = new float[0];
-        float[] leiturasVelocidadeY = new float[0];
-        float[] verdadeiroPosX = new float[0];
-        float[] verdadeiroPosY = new float[0];
-        float[][] snapshotDistancias = null;
+    public static class SideSnapshot {
+        public final List<Alvo> alvosAtivos = new ArrayList<>();
+        public List<Canhao> canhoesAtivos = new ArrayList<>();
+        public float[] leiturasPosX = new float[0];
+        public float[] leiturasPosY = new float[0];
+        public float[] leiturasVelocidade = new float[0];
+        public float[] leiturasVelocidadeX = new float[0];
+        public float[] leiturasVelocidadeY = new float[0];
+        public float[] verdadeiroPosX = new float[0];
+        public float[] verdadeiroPosY = new float[0];
+        public float[] verdadeiroVelocidadeX = new float[0];
+        public float[] verdadeiroVelocidadeY = new float[0];
+        public float[][] snapshotDistancias = null;
     }
 
     private void preencherLeiturasLado(SideSnapshot snap) {
@@ -245,6 +245,8 @@ public class SensorThread extends Thread {
         snap.leiturasVelocidadeY = new float[count];
         snap.verdadeiroPosX = new float[count];
         snap.verdadeiroPosY = new float[count];
+        snap.verdadeiroVelocidadeX = new float[count];
+        snap.verdadeiroVelocidadeY = new float[count];
 
         for (int i = 0; i < count; i++) {
             Alvo alvo = snap.alvosAtivos.get(i);
@@ -261,6 +263,8 @@ public class SensorThread extends Thread {
             snap.leiturasVelocidadeY[i] = aplicarRuidoProporcional(realVy);
             snap.verdadeiroPosX[i] = realX;
             snap.verdadeiroPosY[i] = realY;
+            snap.verdadeiroVelocidadeX[i] = realVx;
+            snap.verdadeiroVelocidadeY[i] = realVy;
         }
 
         int numCanhoes = snap.canhoesAtivos.size();
@@ -325,6 +329,10 @@ public class SensorThread extends Thread {
             s.vy = snap.leiturasVelocidadeY[i];
             s.x = snap.leiturasPosX[i];
             s.y = snap.leiturasPosY[i];
+            s.trueVx = snap.verdadeiroVelocidadeX[i];
+            s.trueVy = snap.verdadeiroVelocidadeY[i];
+            s.trueX = snap.verdadeiroPosX[i];
+            s.trueY = snap.verdadeiroPosY[i];
             if (snap.snapshotDistancias != null) {
                 s.distancias = snap.snapshotDistancias[i];
                 // GUARDAR POSIÇÕES DOS CANHÕES PARA RECONCILIAÇÃO GEOMÉTRICA CONSISTENTE
@@ -400,15 +408,32 @@ public class SensorThread extends Thread {
             return;
         }
         double mediaX = media(snap.leiturasPosX);
-        double varX = varianciaAmostral(snap.leiturasPosX, mediaX);
-        double mediaY = media(snap.leiturasPosY);
-        double varY = varianciaAmostral(snap.leiturasPosY, mediaY);
-        double mediaV = media(snap.leiturasVelocidade);
-        double varV = varianciaAmostral(snap.leiturasVelocidade, mediaV);
-        double mediaVelX = media(snap.leiturasVelocidadeX);
-        double varVelX = varianciaAmostral(snap.leiturasVelocidadeX, mediaVelX);
-        double mediaVelY = media(snap.leiturasVelocidadeY);
-        double varVelY = varianciaAmostral(snap.leiturasVelocidadeY, mediaVelY);
+        float[] residuoX = new float[snap.leiturasPosX.length];
+        float[] residuoY = new float[snap.leiturasPosY.length];
+        float[] residuoVelX = new float[snap.leiturasVelocidadeX.length];
+        float[] residuoVelY = new float[snap.leiturasVelocidadeY.length];
+        float[] residuoVel = new float[snap.leiturasVelocidade.length];
+        for (int i = 0; i < snap.leiturasPosX.length; i++) {
+            residuoX[i] = snap.leiturasPosX[i] - snap.verdadeiroPosX[i];
+            residuoY[i] = snap.leiturasPosY[i] - snap.verdadeiroPosY[i];
+            residuoVelX[i] = snap.leiturasVelocidadeX[i] - snap.verdadeiroVelocidadeX[i];
+            residuoVelY[i] = snap.leiturasVelocidadeY[i] - snap.verdadeiroVelocidadeY[i];
+            float velLeitura = snap.leiturasVelocidade[i];
+            float velReal = (float) Math.sqrt(
+                    snap.verdadeiroVelocidadeX[i] * snap.verdadeiroVelocidadeX[i]
+                            + snap.verdadeiroVelocidadeY[i] * snap.verdadeiroVelocidadeY[i]);
+            residuoVel[i] = velLeitura - velReal;
+        }
+        mediaX = media(residuoX);
+        double varX = varianciaAmostral(residuoX, mediaX);
+        double mediaY = media(residuoY);
+        double varY = varianciaAmostral(residuoY, mediaY);
+        double mediaV = media(residuoVel);
+        double varV = varianciaAmostral(residuoVel, mediaV);
+        double mediaVelX = media(residuoVelX);
+        double varVelX = varianciaAmostral(residuoVelX, mediaVelX);
+        double mediaVelY = media(residuoVelY);
+        double varVelY = varianciaAmostral(residuoVelY, mediaVelY);
         
         ReconciliationLog.getInstance().logSensorStats(
                 lado.name(), snap.alvosAtivos.size(), historico, mediaX, varX, mediaV, varV);
@@ -576,6 +601,22 @@ public class SensorThread extends Thread {
         }
     }
 
+    /**
+     * Retorna a quantidade de alvos que já possuem histórico suficiente para reconciliação.
+     * Atende ao requisito de cobertura mínima da AV2.
+     */
+    public int getAlvosProntosCount(Lado lado) {
+        synchronized (sensorLock) {
+            SideSensorData dado = dadosPorLado.get(lado);
+            if (dado == null) return 0;
+            int prontos = 0;
+            for (TargetHistory th : dado.historicoPorAlvo.values()) {
+                if (th.samples.size() >= TAMANHO_HISTORICO) prontos++;
+            }
+            return prontos;
+        }
+    }
+
     public static int getHistoricoMinimoReconciliacao() {
         return TAMANHO_HISTORICO;
     }
@@ -673,10 +714,15 @@ public class SensorThread extends Thread {
         public final float[] canhoesY;
         public final float verdadeiroX, verdadeiroY;
         public final float leituraX, leituraY;
+        public final float verdadeiroVelX, verdadeiroVelY;
+        public final float leituraVelX, leituraVelY;
 
-        public TargetSnapshot(long id, float[][] mediaD, float[][] varD, float[] cX, float[] cY, float vX, float vY, float lX, float lY) {
+        public TargetSnapshot(long id, float[][] mediaD, float[][] varD, float[] cX, float[] cY,
+                              float vX, float vY, float lX, float lY,
+                              float tvx, float tvy, float lvx, float lvy) {
             this.id = id; this.mediaD = mediaD; this.varD = varD; this.canhoesX = cX; this.canhoesY = cY;
             this.verdadeiroX = vX; this.verdadeiroY = vY; this.leituraX = lX; this.leituraY = lY;
+            this.verdadeiroVelX = tvx; this.verdadeiroVelY = tvy; this.leituraVelX = lvx; this.leituraVelY = lvy;
         }
     }
 
@@ -697,26 +743,32 @@ public class SensorThread extends Thread {
                 float[] mediaD = new float[N];
                 float[] varD = new float[N];
                 
-                // Média e Variância por alvo
+                // Média por alvo (leituras)
                 for (TargetHistory.Sample s : history.samples) {
                     if (s.distancias == null || s.distancias.length != N) continue;
                     for (int j = 0; j < N; j++) mediaD[j] += s.distancias[j];
                 }
                 for (int j = 0; j < N; j++) mediaD[j] /= history.samples.size();
                 
+                // Variância baseada no RESÍDUO (Leitura - Real) para isolar o ruído do movimento (AV2)
                 for (TargetHistory.Sample s : history.samples) {
                     if (s.distancias == null || s.distancias.length != N) continue;
                     for (int j = 0; j < N; j++) {
-                        float diff = s.distancias[j] - mediaD[j];
-                        varD[j] += diff * diff;
+                        float dx = s.trueX - s.canhoesX[j];
+                        float dy = s.trueY - s.canhoesY[j];
+                        float distReal = (float) Math.sqrt(dx * dx + dy * dy);
+                        float residuo = s.distancias[j] - distReal;
+                        varD[j] += residuo * residuo;
                     }
                 }
                 for (int j = 0; j < N; j++) {
-                    varD[j] = Math.max(varD[j] / (history.samples.size() - 1), 0.01f);
+                    varD[j] = Math.max(varD[j] / history.samples.size(), 0.01f);
                 }
 
-                results.add(new TargetSnapshot(entry.getKey(), new float[][]{mediaD}, new float[][]{varD}, 
-                        last.canhoesX, last.canhoesY, 0, 0, last.x, last.y));
+                results.add(new TargetSnapshot(entry.getKey(), new float[][]{mediaD}, new float[][]{varD},
+                        last.canhoesX, last.canhoesY,
+                        last.trueX, last.trueY, last.x, last.y,
+                        last.trueVx, last.trueVy, last.vx, last.vy));
             }
             return results;
         }

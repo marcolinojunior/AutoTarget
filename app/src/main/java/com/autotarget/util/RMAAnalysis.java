@@ -148,6 +148,35 @@ public class RMAAnalysis {
 
     public static void resetRuntimeStats() {
         RUNTIME_STATS.clear();
+        for (TaskDef t : TASKS) {
+            RUNTIME_STATS.put(t.id, new RuntimeStats());
+        }
+    }
+
+    /**
+     * Exporta os deadline misses por tarefa para um arquivo CSV.
+     * Atende ao item 35 da rubrica AV2.
+     */
+    public static void exportDeadlineMissesToCSV(android.content.Context context) {
+        String mode = ThreadAffinityHelper.getAffinityMode().name();
+        String filename = "deadline_misses_" + mode + ".csv";
+        StringBuilder sb = new StringBuilder();
+        sb.append("TaskID,Executions,DeadlineMisses,MaxResponseMs,AvgResponseMs,AffinityMode\n");
+        
+        for (Map.Entry<String, RuntimeStats> entry : RUNTIME_STATS.entrySet()) {
+            RuntimeStats stats = entry.getValue();
+            double avg = stats.executions > 0 ? stats.sumResponseMs / stats.executions : 0;
+            sb.append(String.format(Locale.US, "%s,%d,%d,%.2f,%.2f,%s\n",
+                    entry.getKey(), stats.executions, stats.deadlineMisses,
+                    stats.maxResponseMs, avg, mode));
+        }
+        
+        try (java.io.FileOutputStream fos = context.openFileOutput(filename, android.content.Context.MODE_PRIVATE)) {
+            fos.write(sb.toString().getBytes());
+            Log.i(TAG, "Métricas STR exportadas para: " + filename);
+        } catch (Exception e) {
+            Log.e(TAG, "Erro ao exportar CSV de deadlines: " + e.getMessage());
+        }
     }
 
     public static String getRuntimeMetricsReport() {

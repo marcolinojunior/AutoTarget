@@ -51,13 +51,20 @@ public class BenchmarkActivity extends AppCompatActivity {
         final double speedup;
         final double speedupTeorico;
         final double pEstimado;
+        final int deadlineMisses;
+        final boolean affinityOk;
+        final String affinityMethod;
 
-        BenchmarkSample(int cores, long elapsedMs, double speedup, double speedupTeorico, double pEstimado) {
+        BenchmarkSample(int cores, long elapsedMs, double speedup, double speedupTeorico, double pEstimado,
+                        int deadlineMisses, boolean affinityOk, String affinityMethod) {
             this.cores = cores;
             this.elapsedMs = elapsedMs;
             this.speedup = speedup;
             this.speedupTeorico = speedupTeorico;
             this.pEstimado = pEstimado;
+            this.deadlineMisses = deadlineMisses;
+            this.affinityOk = affinityOk;
+            this.affinityMethod = affinityMethod;
         }
     }
 
@@ -138,7 +145,6 @@ public class BenchmarkActivity extends AppCompatActivity {
         btnIniciar.setEnabled(false);
         resultadosTexto.clear();
         samples.clear();
-        RMAAnalysis.resetRuntimeStats();
 
         resultadosTexto.add("═══ BENCHMARK ESCALABILIDADE ═══");
         resultadosTexto.add("Alvos: " + numAlvos + " | Duração: 30s");
@@ -157,16 +163,20 @@ public class BenchmarkActivity extends AppCompatActivity {
             }
 
             long t1 = 0;
+            StringBuilder metricsByConfig = new StringBuilder();
             for (int i = 0; i < coreConfigs.size(); i++) {
                 int cores = coreConfigs.get(i);
                 int mask = buildAffinityMask(cores, availableCores);
                 updateStatus("Rodando com " + cores + " core(s)...");
+                RMAAnalysis.resetRuntimeStats();
 
-                if (ThreadAffinityHelper.isAvailable()) {
-                    ThreadAffinityHelper.trySetAffinityPreferProcessApi(android.os.Process.myTid(), mask);
-                }
+                boolean affinityOk = ThreadAffinityHelper.trySetAffinityPreferProcessApi(android.os.Process.myTid(), mask);
+                String affinityMethod = ThreadAffinityHelper.getLastAffinityMethod();
+                String affinityError = ThreadAffinityHelper.getLastAffinityError();
 
                 long elapsed = executarCargaTrabalho();
+                String runtimeMetrics = RMAAnalysis.getRuntimeMetricsReport();
+                int deadlineMisses = contarDeadlineMisses(runtimeMetrics);
                 if (i == 0) t1 = elapsed;
 
                 double speedup = t1 > 0 ? (double) t1 / elapsed : 1.0;
@@ -177,10 +187,15 @@ public class BenchmarkActivity extends AppCompatActivity {
                 double pHipotetico = 0.7;
                 double speedupTeorico = 1.0 / ((1 - pHipotetico) + pHipotetico / cores);
 
-                samples.add(new BenchmarkSample(cores, elapsed, speedup, speedupTeorico, pEstimado));
+                samples.add(new BenchmarkSample(cores, elapsed, speedup, speedupTeorico, pEstimado,
+                        deadlineMisses, affinityOk, affinityMethod));
                 resultadosTexto.add(String.format(Locale.US,
-                        "N=%d T=%dms S=%.2f S_teo=%.2f P=%.3f",
-                        cores, elapsed, speedup, speedupTeorico, pEstimado));
+                        "N=%d T=%dms S=%.2f S_teo=%.2f P=%.3f misses=%d affinity=%s(%s)%s",
+                        cores, elapsed, speedup, speedupTeorico, pEstimado,
+                        deadlineMisses, affinityMethod, affinityOk ? "ok" : "fail",
+                        affinityOk ? "" : " err=" + affinityError));
+                metricsByConfig.append(String.format(Locale.US, "## CORES=%d\n", cores));
+                metricsByConfig.append(runtimeMetrics).append("\n");
                 updateResults();
                 updateChart();
             }
@@ -188,10 +203,10 @@ public class BenchmarkActivity extends AppCompatActivity {
             resultadosTexto.add("");
             resultadosTexto.add("Tabela de tarefas (Pi,Ci,Di,Ji,deps):");
             resultadosTexto.add(RMAAnalysis.getTaskTableSummary());
-            resultadosTexto.add("Métricas de resposta observadas:");
-            resultadosTexto.add(RMAAnalysis.getRuntimeMetricsReport());
+            resultadosTexto.add("Métricas de resposta observadas por configuração:");
+            resultadosTexto.add(metricsByConfig.toString());
 
-            exportarParaCSV(samples, RMAAnalysis.getRuntimeMetricsReport());
+            exportarParaCSV(samples, metricsByConfig.toString());
 
             updateResults();
             updateStatus("Benchmark concluído!");
@@ -272,10 +287,11 @@ public class BenchmarkActivity extends AppCompatActivity {
         try {
             java.io.File file = new java.io.File(getExternalFilesDir(null), "benchmark_report.csv");
             java.io.FileWriter writer = new java.io.FileWriter(file);
-            writer.append("cores,elapsed_ms,speedup,speedup_teorico,p_estimado\n");
+            writer.append("cores,elapsed_ms,speedup,speedup_teorico,p_estimado,deadline_misses,affinity_ok,affinity_method\n");
             for (BenchmarkSample s : listSamples) {
-                writer.append(String.format(java.util.Locale.US, "%d,%d,%.3f,%.3f,%.3f\n",
-                        s.cores, s.elapsedMs, s.speedup, s.speedupTeorico, s.pEstimado));
+                writer.append(String.format(java.util.Locale.US, "%d,%d,%.3f,%.3f,%.3f,%d,%s,%s\n",
+                        s.cores, s.elapsedMs, s.speedup, s.speedupTeorico, s.pEstimado,
+                        s.deadlineMisses, s.affinityOk ? "true" : "false", s.affinityMethod));
             }
             writer.append("\n");
             writer.append(rmaMetrics);
@@ -307,6 +323,24 @@ public class BenchmarkActivity extends AppCompatActivity {
         handler.post(() -> chartView.setData(new ArrayList<>(samples)));
     }
 
+    private int contarDeadlineMisses(String runtimeReport) {
+        if (runtimeReport == null || runtimeReport.trim().isEmpty()) return 0;
+        int total = 0;
+        String[] linhas = runtimeReport.split("\n");
+        for (String linha : linhas) {
+            if (linha.startsWith("task,") || linha.startsWith("RUNTIME_METRICS") || linha.trim().isEmpty()) {
+                continue;
+            }
+            String[] cols = linha.split(",");
+            if (cols.length < 6) continue;
+            try {
+                total += Integer.parseInt(cols[5].trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return total;
+    }
+
     @Override
     public boolean onSupportNavigateUp() {
         finish();
@@ -316,29 +350,36 @@ public class BenchmarkActivity extends AppCompatActivity {
     private static class BenchmarkChartView extends View {
         private final Paint paintAxis = new Paint();
         private final Paint paintSpeedup = new Paint();
+        private final Paint paintSpeedupTeorico = new Paint();
         private final Paint paintTempo = new Paint();
-        private final Paint paintJitter = new Paint();
-        private final Paint paintText = new Paint();
         private final Paint paintDeadlineMiss = new Paint();
+        private final Paint paintText = new Paint();
         private final Paint paintLegenda = new Paint();
+        private final Paint paintGrid = new Paint();
         private List<BenchmarkSample> data = new ArrayList<>();
 
         BenchmarkChartView(android.content.Context context) {
             super(context);
             paintAxis.setColor(Color.parseColor("#607D8B"));
-            paintAxis.setStrokeWidth(3f);
+            paintAxis.setStrokeWidth(2f);
             paintSpeedup.setColor(Color.parseColor("#00B4D8"));
+            paintSpeedup.setStyle(Paint.Style.FILL);
+            paintSpeedupTeorico.setColor(Color.parseColor("#00B4D8"));
+            paintSpeedupTeorico.setStyle(Paint.Style.STROKE);
+            paintSpeedupTeorico.setStrokeWidth(3f);
             paintTempo.setColor(Color.parseColor("#E94560"));
-            paintJitter.setColor(Color.parseColor("#FFB300"));
+            paintTempo.setStyle(Paint.Style.FILL);
             paintText.setColor(Color.WHITE);
-            paintText.setTextSize(24f);
+            paintText.setTextSize(22f);
             paintText.setAntiAlias(true);
             paintDeadlineMiss.setColor(Color.RED);
-            paintDeadlineMiss.setStrokeWidth(3f);
+            paintDeadlineMiss.setStrokeWidth(2f);
             paintDeadlineMiss.setStyle(Paint.Style.STROKE);
             paintLegenda.setColor(Color.parseColor("#AAAAAA"));
-            paintLegenda.setTextSize(16f);
+            paintLegenda.setTextSize(14f);
             paintLegenda.setAntiAlias(true);
+            paintGrid.setColor(Color.parseColor("#33FFFFFF"));
+            paintGrid.setStrokeWidth(1f);
         }
 
         void setData(List<BenchmarkSample> data) {
@@ -353,61 +394,100 @@ public class BenchmarkActivity extends AppCompatActivity {
             int h = getHeight();
             float left = 70f;
             float right = w - 20f;
-            float top = 50f;
-            float bottom = h - 80f;
+            float top = 60f;
+            float bottom = h - 100f;
 
             canvas.drawColor(Color.parseColor("#16213E"));
+
+            // Título
+            canvas.drawText("Speedup: Real vs Amdahl (P=0.7)", left, 25, paintText);
+            canvas.drawText("■ Real (azul)  ■ Teórico Amdahl (azul tracejado)  ■ Tempo (vermelho)",
+                    left, 45, paintLegenda);
+
+            // Grid horizontal
+            for (int i = 0; i <= 5; i++) {
+                float y = top + (bottom - top) * i / 5f;
+                canvas.drawLine(left, y, right, y, paintGrid);
+            }
+
+            // Eixos
             canvas.drawLine(left, top, left, bottom, paintAxis);
             canvas.drawLine(left, bottom, right, bottom, paintAxis);
-            
-            // Legenda expandida
-            canvas.drawText("Speedup (azul) | Tempo (vermelho) | Jitter (amarelo)", left, 25, paintText);
-            canvas.drawText("Quadrados vermelhos = Deadline Misses", left, 40, paintLegenda);
 
-            if (data == null || data.isEmpty()) return;
+            if (data == null || data.isEmpty()) {
+                canvas.drawText("Aguardando dados do benchmark...", left + 20, (top + bottom) / 2, paintText);
+                return;
+            }
 
             double maxSpeedup = 1.0;
             long maxTempo = 1;
+            int maxCores = 1;
             for (BenchmarkSample s : data) {
-                maxSpeedup = Math.max(maxSpeedup, s.speedup);
+                maxSpeedup = Math.max(maxSpeedup, Math.max(s.speedup, s.speedupTeorico));
                 maxTempo = Math.max(maxTempo, s.elapsedMs);
+                maxCores = Math.max(maxCores, s.cores);
+            }
+            // Garantir margem no eixo Y
+            maxSpeedup = Math.max(maxSpeedup * 1.1, 1.5);
+
+            // Labels do eixo Y (speedup)
+            for (int i = 0; i <= 5; i++) {
+                float y = bottom - (bottom - top) * i / 5f;
+                double val = maxSpeedup * i / 5.0;
+                canvas.drawText(String.format(Locale.US, "%.1f×", val), 5, y + 5, paintLegenda);
             }
 
             float slot = (right - left) / data.size();
-            float barW = slot * 0.22f;
+            float groupW = slot * 0.7f;
+            float barW = groupW * 0.35f;
+
             for (int i = 0; i < data.size(); i++) {
                 BenchmarkSample s = data.get(i);
-                float baseX = left + i * slot + slot * 0.12f;
+                float groupX = left + i * slot + (slot - groupW) / 2f;
 
-                // Barra de Speedup (azul)
-                float speedupRatio = (float) (s.speedup / maxSpeedup);
-                float speedupH = speedupRatio * (bottom - top - 18f);
-                canvas.drawRect(baseX, bottom - speedupH, baseX + barW, bottom, paintSpeedup);
+                // ── Barra Speedup Real (azul sólido) ──
+                float speedupH = (float) (s.speedup / maxSpeedup) * (bottom - top);
+                canvas.drawRect(groupX, bottom - speedupH, groupX + barW, bottom, paintSpeedup);
 
-                // Barra de Tempo (vermelho)
-                float tempoRatio = (float) s.elapsedMs / maxTempo;
-                float tempoH = tempoRatio * (bottom - top - 18f);
-                float tx = baseX + barW + 4f;
-                canvas.drawRect(tx, bottom - tempoH, tx + barW, bottom, paintTempo);
+                // Valor sobre a barra
+                canvas.drawText(String.format(Locale.US, "%.2f×", s.speedup),
+                        groupX + barW / 2f - 15, bottom - speedupH - 5, paintLegenda);
 
-                // Barra de Jitter (amarelo) - simulado como 10% do tempo
-                float jitterRatio = tempoRatio * 0.1f;
-                float jitterH = jitterRatio * (bottom - top - 18f);
-                float jx = baseX + barW * 2 + 8f;
-                canvas.drawRect(jx, bottom - jitterH, jx + barW, bottom, paintJitter);
+                // ── Barra Speedup Teórico Amdahl (azul tracejado) ──
+                float teoricoH = (float) (s.speedupTeorico / maxSpeedup) * (bottom - top);
+                canvas.drawRect(groupX + barW + 4, bottom - teoricoH,
+                        groupX + barW * 2 + 4, bottom, paintSpeedupTeorico);
 
-                // Indicador de Deadline Miss (moldura vermelha)
-                boolean hasDeadlineMiss = s.elapsedMs > 16; // ex: 16ms deadline para physics
-                if (hasDeadlineMiss) {
-                    canvas.drawRect(baseX - 2, bottom - speedupH - 2, tx + barW + 2, bottom + 2, paintDeadlineMiss);
+                // Valor teórico
+                canvas.drawText(String.format(Locale.US, "%.2f×", s.speedupTeorico),
+                        groupX + barW + 4, bottom - teoricoH - 5, paintLegenda);
+
+                // ── Barra de Tempo (vermelho, lado direito do grupo) ──
+                float tempoH = (float) s.elapsedMs / maxTempo * (bottom - top) * 0.5f;
+                float tempoX = groupX + groupW + 4;
+                canvas.drawRect(tempoX, bottom - tempoH, tempoX + barW * 0.6f, bottom, paintTempo);
+
+                // ── Indicador Deadline Miss ──
+                if (s.deadlineMisses > 0) {
+                    canvas.drawRect(groupX - 3, bottom - Math.max(speedupH, teoricoH) - 8,
+                            tempoX + barW * 0.6f + 3, bottom + 3, paintDeadlineMiss);
+                    canvas.drawText("⚠ " + s.deadlineMisses + " misses",
+                            groupX, bottom + 18, paintDeadlineMiss);
                 }
 
-                canvas.drawText("N=" + s.cores, baseX - 2f, bottom + 30f, paintText);
+                // ── Label do eixo X (N cores) ──
+                canvas.drawText("N=" + s.cores, groupX + barW / 2f - 10, bottom + 35, paintText);
+
+                // ── P estimado ──
+                if (s.pEstimado > 0) {
+                    canvas.drawText(String.format(Locale.US, "P=%.2f", s.pEstimado),
+                            groupX, bottom + 55, paintLegenda);
+                }
             }
-            
-            // Rodapé com estatísticas
-            canvas.drawText("Configs testadas: " + data.size() + " | Para detalhes, ver relatório RMA", 
-                    left, h - 15f, paintLegenda);
+
+            // Rodapé
+            canvas.drawText("Lei de Amdahl: S(N) = 1 / ((1-P) + P/N) | P=serial estimado",
+                    left, h - 15, paintLegenda);
         }
     }
 }

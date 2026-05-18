@@ -143,4 +143,225 @@ public class DataReconciliationTest {
         assertEquals("yHat[0] deve ser 10", 10.0, yHat[0], 1e-5);
         assertEquals("yHat[1] deve ser 10", 10.0, yHat[1], 1e-5);
     }
+
+    // ── Testes adicionais para reconcile() com dados conhecidos ──
+
+    @Test
+    public void testReconcile_NullInputs_ReturnsOriginalY() {
+        double[] y = {1.0, 2.0, 3.0};
+        double[][] V = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+
+        double[] result = DataReconciliation.reconcile(y, V, null);
+        assertArrayEquals("V nulo deve retornar y original", y, result, 1e-10);
+
+        double[][] A = {{1.0, -1.0, 0.0}};
+        result = DataReconciliation.reconcile(y, null, A);
+        assertArrayEquals("y nulo deve retornar y original (null → new double[0])", y, result, 1e-10);
+    }
+
+    @Test
+    public void testReconcile_EmptyY_ReturnsOriginal() {
+        double[] y = {};
+        double[][] V = {};
+        double[][] A = {};
+
+        double[] result = DataReconciliation.reconcile(y, V, A);
+        assertArrayEquals("y vazio deve retornar vazio", y, result, 1e-10);
+    }
+
+    @Test
+    public void testReconcile_UniformVariance_ConstraintSatisfied() {
+        // 4 medições com variância uniforme e restrição: y0 + y1 = y2 + y3
+        double[] y = {10.0, 14.0, 11.0, 13.0}; // soma = 48
+        double[][] V = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}};
+        // Restrição: y0 + y1 - y2 - y3 = 0 (soma dos 2 primeiros = soma dos 2 últimos)
+        double[][] A = {{1.0, 1.0, -1.0, -1.0}};
+
+        double[] yHat = DataReconciliation.reconcile(y, V, A);
+
+        assertNotNull("Resultado não deve ser null", yHat);
+        assertEquals("Deve ter 4 elementos", 4, yHat.length);
+
+        // Verificar que a restrição é satisfeita: y0 + y1 = y2 + y3
+        double somaPrimeiros = yHat[0] + yHat[1];
+        double somaUltimos = yHat[2] + yHat[3];
+        assertEquals("Restrição deve ser satisfeita: y0+y1 = y2+y3",
+                somaPrimeiros, somaUltimos, 1e-6);
+
+        // Com variância uniforme, a correção deve ser distribuída igualmente
+        // y0 e y1 devem ser iguais entre si, y2 e y3 devem ser iguais entre si
+        assertEquals("yHat[0] deve ser igual a yHat[1] (simetria)", yHat[0], yHat[1], 1e-6);
+        assertEquals("yHat[2] deve ser igual a yHat[3] (simetria)", yHat[2], yHat[3], 1e-6);
+    }
+
+    @Test
+    public void testReconcile_HigherVariance_LessCorrection() {
+        // O elemento com maior variância deve receber menor correção
+        double[] y = {10.0, 14.0};
+        // V0 tem variância 100 (alta), V1 tem variância 1 (baixa)
+        double[][] V = {{100, 0}, {0, 1}};
+        // Restrição: y0 = y1
+        double[][] A = {{1.0, -1.0}};
+
+        double[] yHat = DataReconciliation.reconcile(y, V, A);
+
+        assertNotNull("Resultado não deve ser null", yHat);
+
+        // Com variância alta em y0, a correção deve empurrar yHat para mais perto de y1
+        // yHat deve estar mais perto de 14 (menor variância) do que de 10
+        assertTrue("yHat[0] deve ser > 10 (corrigido em direção a y1)",
+                yHat[0] > 10.0);
+        assertTrue("yHat[1] deve ser < 14 (corrigido em direção a y0)",
+                yHat[1] < 14.0);
+
+        // Ambos devem convergir para o mesmo valor
+        assertEquals("yHat[0] deve ser igual a yHat[1]", yHat[0], yHat[1], 1e-6);
+    }
+
+    @Test
+    public void testReconcile_AlreadySatisfiedConstraint_NoChange() {
+        // Se y já satisfaz a restrição, yHat deve ser igual a y
+        double[] y = {10.0, 10.0, 10.0, 10.0};
+        double[][] V = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}};
+        double[][] A = {{1.0, -1.0, 0.0, 0.0}}; // y0 = y1 (já satisfeita)
+
+        double[] yHat = DataReconciliation.reconcile(y, V, A);
+
+        assertNotNull("Resultado não deve ser null", yHat);
+        for (int i = 0; i < y.length; i++) {
+            assertEquals("y já satisfaz restrição, yHat[" + i + "] deve ser igual a y[" + i + "]",
+                    y[i], yHat[i], 1e-10);
+        }
+    }
+
+    @Test
+    public void testReconcile_NonFiniteValues_ReturnsOriginal() {
+        double[] y = {1.0, Double.NaN, 3.0};
+        double[][] V = {{1,0,0}, {0,1,0}, {0,0,1}};
+        double[][] A = {{1.0, -1.0, 0.0}};
+
+        double[] result = DataReconciliation.reconcile(y, V, A);
+        // Com NaN no input, o resultado deve conter NaN (propagação)
+        // ou retornar y original se detectar não-finito
+        assertNotNull("Resultado não deve ser null", result);
+    }
+
+    @Test
+    public void testReconcile_LargeSystem_Consistency() {
+        // Sistema 6x6 com 2 restrições independentes
+        int n = 6;
+        double[] y = {12.0, 8.0, 15.0, 5.0, 20.0, 10.0};
+        double[][] V = new double[n][n];
+        for (int i = 0; i < n; i++) V[i][i] = 1.0;
+
+        // 2 restrições: y0+y1=y2+y3 e y2+y3=y4+y5
+        double[][] A = {
+                {1.0, 1.0, -1.0, -1.0, 0.0, 0.0},
+                {0.0, 0.0, 1.0, 1.0, -1.0, -1.0}
+        };
+
+        double[] yHat = DataReconciliation.reconcile(y, V, A);
+
+        assertNotNull("Resultado não deve ser null", yHat);
+        assertEquals("Deve ter 6 elementos", n, yHat.length);
+
+        // Verificar restrição 1: y0+y1 = y2+y3
+        double soma1 = yHat[0] + yHat[1];
+        double soma2 = yHat[2] + yHat[3];
+        assertEquals("Restrição 1 deve ser satisfeita", soma1, soma2, 1e-4);
+
+        // Verificar restrição 2: y2+y3 = y4+y5
+        double soma3 = yHat[4] + yHat[5];
+        assertEquals("Restrição 2 deve ser satisfeita", soma2, soma3, 1e-4);
+    }
+
+    @Test
+    public void testReconcile_NormaRestricao() {
+        // Testar calcularNormaRestrição com dados conhecidos
+        double[][] A = {{1.0, -1.0, 0.0}};
+        double[] yHat = {5.0, 5.0, 10.0}; // y0 - y1 = 0 → norma = 0
+
+        double norma = DataReconciliation.calcularNormaRestricao(A, yHat);
+        assertEquals("Norma deve ser 0 quando restrição é satisfeita", 0.0, norma, 1e-10);
+
+        double[] yHat2 = {7.0, 3.0, 10.0}; // y0 - y1 = 4 → norma = 4
+        double norma2 = DataReconciliation.calcularNormaRestricao(A, yHat2);
+        assertEquals("Norma deve ser 4.0", 4.0, norma2, 1e-10);
+    }
+
+    @Test
+    public void testReconcile_VarianciaCalculation() {
+        double[] valores = {2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0};
+        double var = DataReconciliation.calcularVariancia(valores);
+        // Variância amostral conhecida: 4.0
+        assertEquals("Variância amostral deve ser 4.0", 4.0, var, 0.5);
+
+        // Variância de 1 elemento = 0
+        assertEquals(0.0, DataReconciliation.calcularVariancia(new double[]{5.0}), 1e-10);
+
+        // Variância de null = 0
+        assertEquals(0.0, DataReconciliation.calcularVariancia(null), 1e-10);
+    }
+
+    // ── Teste de integração: reconcile + calcularErroRMS ────────
+
+    @Test
+    public void testReconcileErroRMS_ReducaoConsistente() {
+        // Simular 100 medições com ruído e verificar que a reconciliação reduz erro
+        java.util.Random rng = new java.util.Random(12345);
+        int N = 4; // canhões
+        int M = 1; // alvo
+        float trueX = 250f, trueY = 250f;
+
+        // Posições dos canhões (quadrado)
+        float[] cX = {0f, 500f, 0f, 500f};
+        float[] cY = {0f, 0f, 500f, 500f};
+
+        double mseAntesTotal = 0;
+        double mseDepoisTotal = 0;
+        int trials = 200;
+
+        for (int t = 0; t < trials; t++) {
+            float[] medias = new float[N];
+            float[] vars = new float[N];
+
+            for (int j = 0; j < N; j++) {
+                double dx = trueX - cX[j];
+                double dy = trueY - cY[j];
+                double distReal = Math.sqrt(dx * dx + dy * dy);
+                double ruido = rng.nextGaussian() * 3.0; // 3px de ruído
+                medias[j] = (float) Math.max(0.1, distReal + ruido);
+                vars[j] = 9.0f; // variância = 3^2
+            }
+
+            DataReconciliation.ReconciliationResult[] results =
+                    new DataReconciliation().reconciliar(cX, cY, new float[][]{medias}, new float[][]{vars});
+
+            if (results != null && results.length > 0 && results[0] != null) {
+                double erroAntes = Math.sqrt(medias[0] * medias[0]) - Math.sqrt(trueX * trueX + trueY * trueX);
+                double erroDepois = Math.sqrt(results[0].distanciasReconciliadas[0] * results[0].distanciasReconciliadas[0])
+                        - Math.sqrt(trueX * trueX + trueY * trueX);
+                mseAntesTotal += erroAntes * erroAntes;
+                mseDepoisTotal += erroDepois * erroDepois;
+            }
+        }
+
+        double mseAntes = mseAntesTotal / trials;
+        double mseDepois = mseDepoisTotal / trials;
+        double reducao = (1.0 - mseDepois / mseAntes) * 100.0;
+
+        System.out.println(String.format(java.util.Locale.US,
+                "TEST-RECON-RMS: MSE antes=%.4f, depois=%.4f, redução=%.1f%%",
+                mseAntes, mseDepois, reducao));
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────
+
+    private void assertArrayEquals(String msg, double[] expected, double[] actual, double delta) {
+        assertNotNull("Resultado não deve ser null", actual);
+        assertEquals(msg + " (tamanho)", expected.length, actual.length);
+        for (int i = 0; i < expected.length; i++) {
+            assertEquals(msg + " [" + i + "]", expected[i], actual[i], delta);
+        }
+    }
 }

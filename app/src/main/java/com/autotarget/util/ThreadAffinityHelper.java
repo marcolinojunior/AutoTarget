@@ -36,6 +36,9 @@ public class ThreadAffinityHelper {
     private static final String TAG = "ThreadAffinity";
     private static boolean loaded = false;
     private static volatile AffinityMode affinityMode = AffinityMode.ALL_CORES;
+    private static volatile boolean lastAffinitySuccess = false;
+    private static volatile String lastAffinityMethod = "none";
+    private static volatile String lastAffinityError = "";
 
     /** Máscaras de afinidade para big.LITTLE ARM SoC */
     public static final int BIG_CORES = 0xF0;     // Cores 4-7 (alto desempenho)
@@ -61,7 +64,23 @@ public class ThreadAffinityHelper {
         return (1 << effective) - 1;
     }
 
-    private static int resolveMaskForMode() {
+    private static int buildLowerHalfMask(int available) {
+        int effective = Math.max(1, Math.min(available, 16));
+        int half = Math.max(1, effective / 2);
+        return (1 << half) - 1;
+    }
+
+    private static int buildUpperHalfMask(int available) {
+        int effective = Math.max(1, Math.min(available, 16));
+        int half = Math.max(1, effective / 2);
+        int base = (1 << effective) - 1;
+        int low = (1 << half) - 1;
+        int upper = base & ~low;
+        return upper == 0 ? buildDynamicMask(effective) : upper;
+    }
+
+    private static int resolveMaskForMode(boolean preferHighPerformance) {
+        int available = Math.max(1, Runtime.getRuntime().availableProcessors());
         switch (affinityMode) {
             case ONE_CORE:
                 return buildDynamicMask(1);
@@ -69,7 +88,7 @@ public class ThreadAffinityHelper {
                 return buildDynamicMask(2);
             case ALL_CORES:
             default:
-                return buildDynamicMask(Runtime.getRuntime().availableProcessors());
+                return preferHighPerformance ? buildUpperHalfMask(available) : buildLowerHalfMask(available);
         }
     }
 
@@ -102,32 +121,46 @@ public class ThreadAffinityHelper {
     /**
      * Tenta definir a afinidade de CPU, ignorando silenciosamente se JNI não disponível.
      */
-    public static void trySetAffinity(int threadId, int mask) {
+    public static boolean trySetAffinity(int threadId, int mask) {
         if (loaded) {
             try {
                 setThreadAffinityMask(threadId, mask);
-            } catch (Exception e) {
+                lastAffinitySuccess = true;
+                lastAffinityMethod = "jni";
+                lastAffinityError = "";
+                return true;
+            } catch (Throwable e) {
                 Log.w(TAG, "Erro ao definir afinidade para thread " + threadId, e);
+                lastAffinitySuccess = false;
+                lastAffinityMethod = "jni";
+                lastAffinityError = e.getMessage() == null ? "" : e.getMessage();
             }
         }
+        return false;
     }
 
     /**
      * Tenta usar Process.setThreadAffinityMask() via reflexão e faz fallback para JNI.
      * Alguns dispositivos não expõem a API; nesses casos, usa o wrapper nativo.
      */
-    public static void trySetAffinityPreferProcessApi(int threadId, int mask) {
+    public static boolean trySetAffinityPreferProcessApi(int threadId, int mask) {
         try {
             java.lang.reflect.Method method = android.os.Process.class
                     .getDeclaredMethod("setThreadAffinityMask", int.class, int.class);
             method.setAccessible(true);
             method.invoke(null, threadId, mask);
             Log.i(TAG, "Afinidade aplicada via Process.setThreadAffinityMask para thread " + threadId + " com máscara " + mask);
-            return;
+            lastAffinitySuccess = true;
+            lastAffinityMethod = "process-api";
+            lastAffinityError = "";
+            return true;
         } catch (Throwable e) {
             Log.w(TAG, "Process.setThreadAffinityMask não disponível via reflexão (fallback para JNI). Motivo: " + e.getMessage());
+            lastAffinitySuccess = false;
+            lastAffinityMethod = "process-api";
+            lastAffinityError = e.getMessage() == null ? "" : e.getMessage();
         }
-        trySetAffinity(threadId, mask);
+        return trySetAffinity(threadId, mask);
     }
 
     /**
@@ -135,7 +168,7 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForCriticalTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
+        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode(true));
     }
 
     /**
@@ -143,7 +176,16 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForMediumTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
+        int available = Math.max(1, Runtime.getRuntime().availableProcessors());
+        int mask;
+        if (affinityMode == AffinityMode.ONE_CORE) {
+            mask = buildDynamicMask(1);
+        } else if (affinityMode == AffinityMode.TWO_CORES) {
+            mask = buildDynamicMask(2);
+        } else {
+            mask = buildDynamicMask(available);
+        }
+        trySetAffinityPreferProcessApi(threadId, mask);
     }
 
     /**
@@ -151,6 +193,18 @@ public class ThreadAffinityHelper {
      * @param threadId ID da thread (obtido via android.os.Process.myTid())
      */
     public static void setAffinityForBackgroundTask(int threadId) {
-        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode());
+        trySetAffinityPreferProcessApi(threadId, resolveMaskForMode(false));
+    }
+
+    public static boolean wasLastAffinitySuccessful() {
+        return lastAffinitySuccess;
+    }
+
+    public static String getLastAffinityMethod() {
+        return lastAffinityMethod;
+    }
+
+    public static String getLastAffinityError() {
+        return lastAffinityError;
     }
 }

@@ -121,8 +121,11 @@ public abstract class Alvo extends Thread {
     public void run() {
         while (isAtivo()) {
             try {
+                long startNs = System.nanoTime();
                 mover();
                 verificarLimites();
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000; // execução sem sleep
+                com.autotarget.util.RMAAnalysis.checkDeadline("T3-Alvo", elapsedMs, INTERVALO_ATUALIZACAO);
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

@@ -61,6 +61,7 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         BarChart barChartRecon = findViewById(R.id.barChartRecon);
         LineChart lineChartUtility = findViewById(R.id.lineChartUtility);
         LineChart lineChartConditioning = findViewById(R.id.lineChartConditioning);
+        LineChart lineChartPositionError = findViewById(R.id.lineChartPositionError);
 
         String finalReport = report;
         btnCopyLogs.setOnClickListener(v -> {
@@ -125,6 +126,7 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         setupReconChart(barChartRecon);
         setupUtilityChart(lineChartUtility);
         setupConditioningChart(lineChartConditioning);
+        setupPositionErrorChart(lineChartPositionError);
     }
 
     private void setupEnergyChart(LineChart chart) {
@@ -220,39 +222,80 @@ public class ReconciliationReportActivity extends AppCompatActivity {
     }
 
     private void setupConditioningChart(LineChart chart) {
-        List<ReconciliationLog.SensorCountSample> samples = ReconciliationLog.getInstance().getSensorCountSamples();
+        List<ReconciliationLog.ConditioningSample> samples = ReconciliationLog.getInstance().getConditioningSamples();
         if (samples.isEmpty()) {
-            chart.setNoDataText("Nenhum dado de quantidade de alvos registrado.");
+            chart.setNoDataText("Nenhum dado de condicionamento registrado.");
             chart.setNoDataTextColor(Color.WHITE);
             return;
         }
 
-        List<Entry> entriesEsq = new ArrayList<>();
-        List<Entry> entriesDir = new ArrayList<>();
-        int idxEsq = 0;
-        int idxDir = 0;
-
-        for (ReconciliationLog.SensorCountSample s : samples) {
-            if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
-                entriesEsq.add(new Entry(idxEsq++, s.alvos));
-            } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
-                entriesDir.add(new Entry(idxDir++, s.alvos));
-            }
+        List<Entry> entriesCond = new ArrayList<>();
+        List<Entry> entriesFallback = new ArrayList<>();
+        for (int i = 0; i < samples.size(); i++) {
+            ReconciliationLog.ConditioningSample s = samples.get(i);
+            float valor = Double.isFinite(s.conditionNumber)
+                    ? (float) Math.log10(Math.max(1.0, s.conditionNumber))
+                    : 12f;
+            entriesCond.add(new Entry(i, valor));
+            entriesFallback.add(new Entry(i, s.usouFallback ? valor : 0f));
         }
 
-        LineDataSet setEsq = new LineDataSet(entriesEsq, "Alvos Esq");
-        setEsq.setColor(Color.parseColor("#00B4D8"));
-        setEsq.setCircleColor(Color.parseColor("#00B4D8"));
-        setEsq.setLineWidth(2f);
-        setEsq.setValueTextColor(Color.WHITE);
+        LineDataSet setCond = new LineDataSet(entriesCond, "log10(cond)");
+        setCond.setColor(Color.parseColor("#00B4D8"));
+        setCond.setCircleColor(Color.parseColor("#00B4D8"));
+        setCond.setLineWidth(2f);
+        setCond.setValueTextColor(Color.WHITE);
 
-        LineDataSet setDir = new LineDataSet(entriesDir, "Alvos Dir");
-        setDir.setColor(Color.parseColor("#E94560"));
-        setDir.setCircleColor(Color.parseColor("#E94560"));
-        setDir.setLineWidth(2f);
-        setDir.setValueTextColor(Color.WHITE);
+        LineDataSet setFallback = new LineDataSet(entriesFallback, "fallback");
+        setFallback.setColor(Color.parseColor("#E94560"));
+        setFallback.setCircleColor(Color.parseColor("#E94560"));
+        setFallback.setLineWidth(2f);
+        setFallback.setValueTextColor(Color.WHITE);
 
-        chart.setData(new LineData(setEsq, setDir));
+        chart.setData(new LineData(setCond, setFallback));
+        chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        chart.getXAxis().setTextColor(Color.WHITE);
+        chart.getAxisLeft().setTextColor(Color.WHITE);
+        chart.getAxisRight().setEnabled(false);
+        chart.getLegend().setTextColor(Color.WHITE);
+        chart.getDescription().setEnabled(false);
+        chart.invalidate();
+    }
+
+    private void setupPositionErrorChart(LineChart chart) {
+        List<ReconciliationLog.ReconSample> samples = ReconciliationLog.getInstance().getReconSamples();
+        if (samples.isEmpty()) {
+            chart.setNoDataText("Nenhum dado de erro posicional registrado.");
+            chart.setNoDataTextColor(Color.WHITE);
+            return;
+        }
+
+        List<Entry> entriesAntes = new ArrayList<>();
+        List<Entry> entriesDepois = new ArrayList<>();
+        int step = Math.max(1, samples.size() / 100);
+        int idx = 0;
+        for (int i = 0; i < samples.size(); i += step) {
+            ReconciliationLog.ReconSample s = samples.get(i);
+            float erroAntesAprox = (float) Math.sqrt(Math.max(0.0, s.mseBruto));
+            float erroDepois = (float) s.erroPos;
+            entriesAntes.add(new Entry(idx, erroAntesAprox));
+            entriesDepois.add(new Entry(idx, erroDepois));
+            idx++;
+        }
+
+        LineDataSet setAntes = new LineDataSet(entriesAntes, "Erro antes (aprox)");
+        setAntes.setColor(Color.parseColor("#FF9800"));
+        setAntes.setCircleColor(Color.parseColor("#FF9800"));
+        setAntes.setLineWidth(2f);
+        setAntes.setValueTextColor(Color.WHITE);
+
+        LineDataSet setDepois = new LineDataSet(entriesDepois, "Erro depois");
+        setDepois.setColor(Color.parseColor("#4CAF50"));
+        setDepois.setCircleColor(Color.parseColor("#4CAF50"));
+        setDepois.setLineWidth(2f);
+        setDepois.setValueTextColor(Color.WHITE);
+
+        chart.setData(new LineData(setAntes, setDepois));
         chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
         chart.getXAxis().setTextColor(Color.WHITE);
         chart.getAxisLeft().setTextColor(Color.WHITE);

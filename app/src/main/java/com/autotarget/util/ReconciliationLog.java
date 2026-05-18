@@ -359,7 +359,8 @@ public final class ReconciliationLog {
         double erroPos = Math.hypot(xEstimado - xReal, yEstimado - yReal);
 
         if (!Double.isFinite(mseRecon)) mseRecon = mseBruto;
-        if (Math.abs(mseRecon - mseBruto) < 1e-7) erroPos = 0.0;
+        // FIX: Não zerar artificialmente o erro posicional; manter o valor real calculado
+        // para evidência da qualidade da reconciliação (AV2).
 
         reconSamples.add(new ReconSample(mseBruto, mseRecon, erroPos, normA_yHat, lado));
         appendEvento(String.format(Locale.US,

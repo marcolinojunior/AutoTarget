@@ -4,10 +4,14 @@ import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
 import com.autotarget.model.Lado;
 import com.autotarget.util.EnergyManager;
+import com.autotarget.service.ReconciliacaoThread;
+import com.autotarget.service.SensorThread;
 import org.junit.Test;
 import static org.junit.Assert.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 
 public class JogoRegrasNegocioTest {
 
@@ -19,19 +23,16 @@ public class JogoRegrasNegocioTest {
         em.set(50.0f);
         
         Alvo alvo = new AlvoComum(200, 200, 0, 0, 1000, 1000);
-        // Simular nascimento agora para garantir idade < 2s => 1.0f energia
         jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         
         alvo.tentarAbater(Lado.ESQUERDO);
         
-        // Simular o processamento que o Jogo faria
-        java.lang.reflect.Method processar = null;
         try {
-            processar = Jogo.class.getDeclaredMethod("processarAlvosInativos", java.util.List.class, Lado.class);
+            java.lang.reflect.Method processar = Jogo.class.getDeclaredMethod("processarAlvosInativos", List.class, Lado.class);
             processar.setAccessible(true);
             processar.invoke(jogo, jogo.getAlvosEsquerdo(), Lado.ESQUERDO);
         } catch (Exception e) {
-            fail("Erro ao invocar processarAlvosInativos via reflexão: " + e.getMessage());
+            fail("Erro ao invocar processarAlvosInativos: " + e.getMessage());
         }
         
         assertEquals("Energia deve ter aumentado exatamente 1.0f (abate rápido)", 51.0f, em.get(), 0.01f);
@@ -42,19 +43,17 @@ public class JogoRegrasNegocioTest {
         Jogo jogo = new Jogo();
         jogo.iniciar();
         
-        // Simular fim do tempo
         java.lang.reflect.Field tempoField = Jogo.class.getDeclaredField("tempoRestante");
         tempoField.setAccessible(true);
         tempoField.set(jogo, 0);
         
-        // Forçar um placar
         java.lang.reflect.Field pe = Jogo.class.getDeclaredField("pontuacaoEsquerdo");
         pe.setAccessible(true);
-        ((java.util.concurrent.atomic.AtomicInteger)pe.get(jogo)).set(100);
+        ((AtomicInteger)pe.get(jogo)).set(100);
         
         java.lang.reflect.Field pd = Jogo.class.getDeclaredField("pontuacaoDireito");
         pd.setAccessible(true);
-        ((java.util.concurrent.atomic.AtomicInteger)pd.get(jogo)).set(50);
+        ((AtomicInteger)pd.get(jogo)).set(50);
         
         final Lado[] vencedorCapturado = new Lado[1];
         final CountDownLatch latch = new CountDownLatch(1);
@@ -66,7 +65,7 @@ public class JogoRegrasNegocioTest {
             @Override public void onTempoAtualizado(int tempo) {}
             @Override public void onEnergiaAtualizada(float e, float d) {}
             @Override public void onRelatorioReconciliacao(String r) {}
-            @Override public void onPartidaEncerrada(int e, int d, int rec, int miss, Lado vencedor) {
+            @Override public void onPartidaEncerrada(int e, int d, int tempo, int rec, Lado vencedor) {
                 vencedorCapturado[0] = vencedor;
                 latch.countDown();
             }
@@ -94,15 +93,52 @@ public class JogoRegrasNegocioTest {
             @Override public void onTempoAtualizado(int tempo) {}
             @Override public void onEnergiaAtualizada(float e, float d) {}
             @Override public void onRelatorioReconciliacao(String r) {}
-            @Override public void onPartidaEncerrada(int e, int d, int rec, int miss, Lado vencedor) {
+            @Override public void onPartidaEncerrada(int e, int d, int tempo, int rec, Lado vencedor) {
                 if (vencedor == null) empateCapturado[0] = true;
                 latch.countDown();
             }
         });
         
-        jogo.encerrarPartida(); // Pontuações 0 e 0
+        jogo.encerrarPartida();
         
         assertTrue(latch.await(1, TimeUnit.SECONDS));
         assertTrue("Partida sem pontos deve resultar em empate (vencedor null)", empateCapturado[0]);
+    }
+
+    @Test
+    public void testSelecaoConsistenteCanhaoRemocao() throws Exception {
+        float[][] distancias = {
+            {10f, 500f},
+            {15f, 600f}
+        };
+        
+        ReconciliacaoThread rt = new ReconciliacaoThread(null, null, null, null, null);
+        java.lang.reflect.Method method = rt.getClass().getDeclaredMethod("selecionarCanhaoMenorContribuicao", float[][].class);
+        method.setAccessible(true);
+        
+        Integer indice = (Integer) method.invoke(rt, (Object) distancias);
+        
+        assertEquals("Canhão 1 deve ser selecionado para remoção", 1, indice.intValue());
+    }
+
+    @Test
+    public void testMudancaDinamicaCanhoesNaoCorrompeHistorico() throws Exception {
+        Jogo jogo = new Jogo();
+        jogo.setDimensoesTela(1000, 1000);
+        SensorThread st = new SensorThread(jogo, new Object(), new Object());
+        
+        Alvo alvo = new AlvoComum(100, 100, 0, 0, 1000, 1000);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
+        
+        jogo.adicionarCanhao(10, 10, Lado.ESQUERDO);
+        java.lang.reflect.Method coletar = SensorThread.class.getDeclaredMethod("coletarDados");
+        coletar.setAccessible(true);
+        coletar.invoke(st);
+        
+        jogo.adicionarCanhao(20, 20, Lado.ESQUERDO);
+        coletar.invoke(st);
+        
+        List<SensorThread.TargetSnapshot> snaps = st.getSnapshotsParaReconciliacao(Lado.ESQUERDO);
+        assertNotNull(snaps);
     }
 }

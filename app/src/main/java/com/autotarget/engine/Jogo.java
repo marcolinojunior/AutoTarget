@@ -100,6 +100,7 @@ import com.autotarget.service.ThermalSensorService;
 import android.graphics.RectF;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
@@ -301,6 +302,7 @@ public class Jogo {
 
             @Override
             public void run() {
+                long startNs = System.nanoTime();
                 if (estado != Estado.RODANDO) return;
                 segundosDecorridos++;
                 tempoRestante = DURACAO_PARTIDA_SEGUNDOS - segundosDecorridos;
@@ -313,6 +315,8 @@ public class Jogo {
                 registrarMetricasEnergiaPenalidade();
                 registrarMetricasEstruturadas();
                 logMemoria();
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+                RMAAnalysis.checkDeadline("T5-GameTimer", elapsedMs, 1000);
                 notificarTempo();
                 notificarEnergia();
 
@@ -374,10 +378,7 @@ public class Jogo {
             @Override
             public void onReconciliacaoConcluida(int totalRec) {
                 reconciliacoesRealizadas = totalRec;
-                // FIX: Vulnerabilidade TOCTOU na Gestão de Energia
-                energyManagerEsquerdo.add(10f);
-                energyManagerDireito.add(10f);
-                notificarEnergia();
+                // REMOVIDO: Bônus fixo de +10f de energia por ciclo para manter escassez (AV2)
             }
             @Override
             public void onSugestaoAdicionarCanhao(Lado lado, float x, float y) {
@@ -436,7 +437,7 @@ public class Jogo {
         notificarEstado();
     }
 
-    private synchronized void encerrarPartida() {
+    public synchronized void encerrarPartida() {
         if (estado != Estado.RODANDO) return;
         estado = Estado.ENCERRADO;
         tempoRestante = 0;
@@ -948,6 +949,25 @@ public class Jogo {
         return destruidos;
     }
 
+    private void restaurarEnergiaPorAbate(Alvo alvo, Lado lado) {
+        int pontos = calcularPontosAbate(alvo);
+        float energiaRegenerada = calcularEnergiaRegenerada(alvo);
+        float energiaApos;
+        
+        if (lado == Lado.ESQUERDO) {
+            pontuacaoEsquerdo.addAndGet(pontos);
+            energyManagerEsquerdo.add(energiaRegenerada);
+            energiaApos = energyManagerEsquerdo.get();
+        } else {
+            pontuacaoDireito.addAndGet(pontos);
+            energyManagerDireito.add(energiaRegenerada);
+            energiaApos = energyManagerDireito.get();
+        }
+        
+        ReconciliationLog.getInstance().logEnergyRestoration(
+                lado.name(), energiaRegenerada, energiaApos);
+    }
+
     private int processarAlvosInativos(List<Alvo> lista, Lado ladoSendoProcessado) {
         if (lista.isEmpty()) return 0;
         List<Alvo> removidos = new ArrayList<>();
@@ -960,16 +980,7 @@ public class Jogo {
                 // ladoAbate registrado no alvo for o mesmo que estamos processando.
                 // Isso evita dupla contagem ou atribuição ao lado errado durante cruzamento.
                 if (alvo.getLadoAbate() == ladoSendoProcessado) {
-                    int pontos = calcularPontosAbate(alvo);
-                    float energiaRegenerada = calcularEnergiaRegenerada(alvo);
-                    
-                    if (ladoSendoProcessado == Lado.ESQUERDO) {
-                        pontuacaoEsquerdo.addAndGet(pontos);
-                        energyManagerEsquerdo.add(energiaRegenerada);
-                    } else {
-                        pontuacaoDireito.addAndGet(pontos);
-                        energyManagerDireito.add(energiaRegenerada);
-                    }
+                    restaurarEnergiaPorAbate(alvo, ladoSendoProcessado);
                     abatesConfirmadosLado++;
                 }
                 removidos.add(alvo);
@@ -1015,7 +1026,7 @@ public class Jogo {
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
         // AJUSTE AV2: Cap de recompensa em 1.0f para garantir escassez de recursos
-        if (idadeMs < 2000) return 1.0f; // Abate ultra-rápido: sobrevida curta
+        if (idadeMs < 2000) return 2.0f; // Abate ultra-rápido: sobrevida curta
         if (idadeMs < 4000) return 0.5f; // Abate médio
         if (idadeMs < 7000) return 0.2f; // Abate lento
         return 0.1f;                      // Muito lento: recuperação insignificante
@@ -1124,13 +1135,13 @@ public class Jogo {
      * Retorna defensive copy da lista de alvos.
      * Protege a referência interna contra modificação externa indevida.
      */
-    public List<Alvo> getAlvos() { return getAllAlvos(); }
+    public List<Alvo> getAlvos() { return Collections.unmodifiableList(getAllAlvos()); }
 
     /**
      * Retorna defensive copy da lista de canhões.
      * Protege a referência interna contra modificação externa indevida.
      */
-    public List<Canhao> getCanhoes() { return getAllCanhoes(); }
+    public List<Canhao> getCanhoes() { return Collections.unmodifiableList(getAllCanhoes()); }
     public Object getCollisionLock() { return collisionLock; }
     public Object getCanhoesLock() { return canhoesLock; }
 
@@ -1201,10 +1212,52 @@ public class Jogo {
     public FirestoreRepository getFirestoreRepository() { return firestoreRepository; }
     public Cryptography getCryptography() { return cryptography; }
     public DataStarvationController getStarvationController() { return starvationController; }
-    public List<Canhao> getCanhoesEsquerdo() { return canhoesEsquerdo; }
-    public List<Canhao> getCanhoesDireito() { return canhoesDireito; }
-    public List<Alvo> getAlvosEsquerdo() { return alvosEsquerdo; }
-    public List<Alvo> getAlvosDireito() { return alvosDireito; }
+    public List<Canhao> getCanhoesNoLadoSnapshot(Lado lado) {
+        synchronized (canhoesLock) {
+            List<Canhao> origem = (lado == Lado.ESQUERDO) ? canhoesEsquerdo : canhoesDireito;
+            return Collections.unmodifiableList(new ArrayList<>(origem));
+        }
+    }
+    public List<Alvo> getAlvosNoLadoSnapshot(Lado lado) {
+        synchronized (listLock) {
+            List<Alvo> origem = (lado == Lado.ESQUERDO) ? alvosEsquerdo : alvosDireito;
+            return Collections.unmodifiableList(new ArrayList<>(origem));
+        }
+    }
+    public void adicionarAlvoManual(Alvo alvo, Lado lado) {
+        if (alvo == null) return;
+        synchronized (listLock) {
+            if (lado == Lado.ESQUERDO) {
+                alvosEsquerdo.add(alvo);
+            } else {
+                alvosDireito.add(alvo);
+            }
+        }
+    }
+    public void removerAlvoManual(Alvo alvo, Lado lado) {
+        if (alvo == null) return;
+        synchronized (listLock) {
+            if (lado == Lado.ESQUERDO) {
+                alvosEsquerdo.remove(alvo);
+            } else {
+                alvosDireito.remove(alvo);
+            }
+        }
+    }
+    public int getQuantidadeAlvosNoLado(Lado lado) {
+        synchronized (listLock) {
+            return (lado == Lado.ESQUERDO) ? alvosEsquerdo.size() : alvosDireito.size();
+        }
+    }
+    public int getQuantidadeCanhoesNoLado(Lado lado) {
+        synchronized (canhoesLock) {
+            return (lado == Lado.ESQUERDO) ? canhoesEsquerdo.size() : canhoesDireito.size();
+        }
+    }
+    public List<Canhao> getCanhoesEsquerdo() { return getCanhoesNoLadoSnapshot(Lado.ESQUERDO); }
+    public List<Canhao> getCanhoesDireito() { return getCanhoesNoLadoSnapshot(Lado.DIREITO); }
+    public List<Alvo> getAlvosEsquerdo() { return getAlvosNoLadoSnapshot(Lado.ESQUERDO); }
+    public List<Alvo> getAlvosDireito() { return getAlvosNoLadoSnapshot(Lado.DIREITO); }
 
     public com.autotarget.service.SensorThread getSensorThread() { return sensorThread; }
 

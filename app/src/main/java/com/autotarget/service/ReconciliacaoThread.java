@@ -9,6 +9,7 @@ import com.autotarget.util.RMAAnalysis;
 import com.autotarget.util.ReconciliationLog;
 import com.autotarget.util.ReconciliationVisualizer;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -27,12 +28,15 @@ public class ReconciliacaoThread extends Thread {
 
     private static final String TAG = "ReconciliacaoThread";
     private static final double BETA = 0.005;
-    private static final double LIMIAR_GANHO = 0.01;
+    private static final double LIMIAR_GANHO_ADICAO = 0.02;   // Histerese: mais difícil adicionar (AV2)
+    private static final double LIMIAR_GANHO_REMOCAO = 0.005;  // Histerese: mais fácil remover (AV2)
+    private static final double LIMIAR_COBERTURA_ALVOS = 0.5; // Pelo menos 50% dos alvos prontos (AV2)
     private static final float ENERGIA_SEGURA_MINIMA = 3f;
     private static final float ENERGIA_CRITICA = 5f;
     private static final float RAZAO_PRESSAO_TATICA = 1.0f;
     private static final int MAX_CANHOES_POR_LADO = 10;
     private static final double LIMIAR_SOBREVIDA_SEGUNDOS = 12.0;
+    private static final long COOLDOWN_DECISAO_MS = 10000L;
     private static final int INTERVALO_TATICO = 3000;
     private static final int INTERVALO_RECONCILIACAO = 10000;
 
@@ -43,11 +47,14 @@ public class ReconciliacaoThread extends Thread {
     private final Object collisionLock;
 
     private volatile boolean ativo;
+    private boolean otimizacaoLigada = true; // Item 29: Controle de otimização
     private volatile int reconciliacoesRealizadas;
     private volatile int ciclosTaticos;
     private volatile int larguraTela;
     private volatile int alturaTela;
     private OnReconciliacaoListener listener;
+    private final EnumMap<Lado, Long> ultimoAddPorLado = new EnumMap<>(Lado.class);
+    private final EnumMap<Lado, Long> ultimoRemovePorLado = new EnumMap<>(Lado.class);
 
     public interface OnReconciliacaoListener {
         void onReconciliacaoConcluida(int totalReconciliacoes);
@@ -70,6 +77,10 @@ public class ReconciliacaoThread extends Thread {
         this.ativo = true;
         this.reconciliacoesRealizadas = 0;
         this.ciclosTaticos = 0;
+        this.ultimoAddPorLado.put(Lado.ESQUERDO, 0L);
+        this.ultimoAddPorLado.put(Lado.DIREITO, 0L);
+        this.ultimoRemovePorLado.put(Lado.ESQUERDO, 0L);
+        this.ultimoRemovePorLado.put(Lado.DIREITO, 0L);
         setDaemon(true);
     }
 
@@ -87,11 +98,11 @@ public class ReconciliacaoThread extends Thread {
             long ultimoCicloReconciliacaoMs = System.currentTimeMillis();
 
             while (ativo) {
-                long startNs = System.nanoTime();
                 try {
                     Thread.sleep(INTERVALO_TATICO);
                     if (!ativo) break;
 
+                    long startNs = System.nanoTime();
                     avaliarPressaoTatica(Lado.ESQUERDO);
                     avaliarPressaoTatica(Lado.DIREITO);
                     ciclosTaticos++;
@@ -102,7 +113,7 @@ public class ReconciliacaoThread extends Thread {
                     }
 
                     long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
-                    RMAAnalysis.checkDeadline("T8-Reconciliacao", elapsedMs, INTERVALO_TATICO);
+                    RMAAnalysis.checkDeadline("T8-Reconciliacao", elapsedMs, INTERVALO_RECONCILIACAO);
                 } catch (InterruptedException e) {
                     ativo = false;
                 } catch (Exception e) {
@@ -120,7 +131,11 @@ public class ReconciliacaoThread extends Thread {
     }
 
     private boolean executarReconciliacaoPorLado(Lado lado) {
-        if (sensorThread.getHistoricoCount(lado) < SensorThread.getHistoricoMinimoReconciliacao()) {
+        int alvosProntos = sensorThread.getAlvosProntosCount(lado);
+        int alvosTotais = jogo.getQuantidadeAlvosNoLado(lado);
+        
+        // AJUSTE AV2: Critério de prontidão por cobertura de alvos elegíveis
+        if (alvosTotais > 0 && (double) alvosProntos / alvosTotais < LIMIAR_COBERTURA_ALVOS) {
             return false;
         }
 
@@ -150,11 +165,14 @@ public class ReconciliacaoThread extends Thread {
             OnReconciliacaoListener l = getListener();
             if (l != null) l.onReconciliacaoConcluida(reconciliacoesRealizadas);
             
-            DataReconciliation.ReconciliationResult[] resultsArr = todosResultados.toArray(new DataReconciliation.ReconciliationResult[0]);
-            avaliarCustoBeneficio(lado, coletarCanhoesAtivos(lado), resultsArr);
-            realocarCanhoes(lado, coletarCanhoesAtivos(lado), resultsArr);
+            if (otimizacaoLigada) {
+                DataReconciliation.ReconciliationResult[] resultsArr = todosResultados.toArray(new DataReconciliation.ReconciliationResult[0]);
+                avaliarCustoBeneficio(lado, coletarCanhoesAtivos(lado), resultsArr);
+                realocarCanhoes(lado, coletarCanhoesAtivos(lado), resultsArr);
+                Log.i(TAG, "Otimização executada para o lado " + lado.name());
+            }
         }
-        sensorThread.limparHistoricoInativo(lado, lado == Lado.ESQUERDO ? jogo.getAlvosEsquerdo() : jogo.getAlvosDireito());
+        sensorThread.limparHistoricoInativo(lado, jogo.getAlvosNoLadoSnapshot(lado));
         return reconciliacoesNoCiclo > 0;
     }
 
@@ -167,7 +185,7 @@ public class ReconciliacaoThread extends Thread {
         }
 
         int nCanhoes = jogo.contarCanhoesAtivos(lado);
-        int nAlvos = lado == Lado.ESQUERDO ? jogo.getAlvosEsquerdo().size() : jogo.getAlvosDireito().size();
+        int nAlvos = jogo.getQuantidadeAlvosNoLado(lado);
         float energia = jogo.getEnergia(lado);
 
         if (nCanhoes == 0) {
@@ -188,10 +206,8 @@ public class ReconciliacaoThread extends Thread {
 
     private List<Canhao> coletarCanhoesAtivos(Lado lado) {
         List<Canhao> canhoes = new ArrayList<>();
-        synchronized(jogo.getCanhoesLock()) {
-            java.util.List<Canhao> origem = lado == Lado.ESQUERDO ? jogo.getCanhoesEsquerdo() : jogo.getCanhoesDireito();
-            for (Canhao c : origem) if (c != null && c.isAtivo()) canhoes.add(c);
-        }
+        java.util.List<Canhao> origem = jogo.getCanhoesNoLadoSnapshot(lado);
+        for (Canhao c : origem) if (c != null && c.isAtivo()) canhoes.add(c);
         return canhoes;
     }
 
@@ -228,6 +244,12 @@ public class ReconciliacaoThread extends Thread {
 
         Double uMais1 = null;
         Double uMenos1 = null;
+        float[] candidataAdicao = null;
+
+        long agoraMs = System.currentTimeMillis();
+        boolean podeAdicionar = (agoraMs - ultimoAddPorLado.get(lado)) >= COOLDOWN_DECISAO_MS;
+        boolean podeRemover = (agoraMs - ultimoRemovePorLado.get(lado)) >= COOLDOWN_DECISAO_MS;
+        boolean sugeriuAcao = false;
 
         if (nCanhoes < MAX_CANHOES_POR_LADO && energiaAtual > ENERGIA_SEGURA_MINIMA) {
             float[] posSugerida = estimarPosicaoAdicao(resultados, lado);
@@ -236,16 +258,20 @@ public class ReconciliacaoThread extends Thread {
 
             // AJUSTE AV2: Repulsão Espacial de Sensores (Circular Random) para quebrar colinearidade
             float distMinima = 150.0f;
+            int idxCanhao = 0;
             for (Canhao c : canhoes) {
                 float dx = novoX - c.getX();
                 float dy = novoY - c.getY();
                 if (Math.sqrt(dx * dx + dy * dy) < distMinima) {
-                    double anguloAleatorio = Math.random() * 2 * Math.PI;
-                    novoX = (float) (novoX + distMinima * Math.cos(anguloAleatorio));
-                    novoY = (float) (novoY + distMinima * Math.sin(anguloAleatorio));
+                    double base = (lado == Lado.ESQUERDO ? 17.0 : 29.0) + (idxCanhao * 13.0) + nCanhoes;
+                    double anguloDeterministico = (base % 360.0) * (Math.PI / 180.0);
+                    novoX = (float) (novoX + distMinima * Math.cos(anguloDeterministico));
+                    novoY = (float) (novoY + distMinima * Math.sin(anguloDeterministico));
                 }
+                idxCanhao++;
             }
             float[] posicaoHipotetica = clampParaLado(lado, novoX, novoY);
+            candidataAdicao = posicaoHipotetica;
 
             float[][] distanciasMais1 = adicionarCandidato(distancias, resultados, posicaoHipotetica[0], posicaoHipotetica[1]);
             uMais1 = DataReconciliation.calcularUtilidade(
@@ -254,16 +280,7 @@ public class ReconciliacaoThread extends Thread {
                     Canhao.getIntervaloDisparoBase());
 
             double sobrevidaSegundos = energiaAtual / Math.max(1.0, (nCanhoes + 1) * 1.0);
-            if ((uMais1 - uAtual) > LIMIAR_GANHO && sobrevidaSegundos >= LIMIAR_SOBREVIDA_SEGUNDOS) {
-                OnReconciliacaoListener l = getListener();
-                if (l != null) {
-                    ReconciliationLog.getInstance().logAIDecision(
-                            "ADICIONAR",
-                            String.format(Locale.US, "DeltaU=%.4f sobrevida=%.1fs", (uMais1 - uAtual), sobrevidaSegundos),
-                            posicaoHipotetica[0], posicaoHipotetica[1], uAtual, uMais1);
-                    l.onSugestaoAdicionarCanhao(lado, posicaoHipotetica[0], posicaoHipotetica[1]);
-                }
-            }
+            // decisão efetiva ocorre após avaliação de conflito com remoção
         }
 
         if (nCanhoes > 1) {
@@ -275,22 +292,59 @@ public class ReconciliacaoThread extends Thread {
                         Canhao.getLimiarPenalidade(), Canhao.getAlphaPenalidade(), BETA,
                         Canhao.getIntervaloDisparoBase());
 
-                if ((uMenos1 - uAtual) > LIMIAR_GANHO || energiaAtual <= ENERGIA_CRITICA) {
-                    Canhao canhaoRemover = canhoes.get(indiceRemocao);
-                    OnReconciliacaoListener l = getListener();
-                    if (l != null) {
-                        ReconciliationLog.getInstance().logAIDecision(
-                                "REMOVER",
-                                String.format(Locale.US, "DeltaU=%.4f energia=%.1f", (uMenos1 - uAtual), energiaAtual),
-                                canhaoRemover.getX(), canhaoRemover.getY(), uAtual, uMenos1);
-                        l.onSugestaoRemoverCanhao(lado, canhaoRemover);
-                    }
+                // decisão efetiva ocorre após avaliação de conflito com adição
+            }
+        }
+
+        boolean condAdd = uMais1 != null
+                && ((uMais1 - uAtual) > LIMIAR_GANHO_ADICAO)
+                && (energiaAtual / Math.max(1.0, (nCanhoes + 1) * 1.0)) >= LIMIAR_SOBREVIDA_SEGUNDOS;
+        boolean condRemove = uMenos1 != null
+                && (((uMenos1 - uAtual) > LIMIAR_GANHO_REMOCAO) || energiaAtual <= ENERGIA_CRITICA);
+
+        // BLOQUEIO DE DECISÃO CONFLITANTE: Se ambos são vantajosos, prioriza remover para economizar energia
+        if (condRemove && condAdd) {
+            condAdd = false; 
+        }
+
+        if (condRemove && podeRemover && nCanhoes > 1) {
+            int indiceRemocao = selecionarCanhaoMenorContribuicao(distancias);
+            if (indiceRemocao >= 0 && indiceRemocao < canhoes.size()) {
+                Canhao canhaoRemover = canhoes.get(indiceRemocao);
+                OnReconciliacaoListener l = getListener();
+                if (l != null) {
+                    ReconciliationLog.getInstance().logAIDecision(
+                            "REMOVER",
+                            String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms",
+                                    (uMenos1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS),
+                            canhaoRemover.getX(), canhaoRemover.getY(), uAtual, uMenos1);
+                    l.onSugestaoRemoverCanhao(lado, canhaoRemover);
+                    ultimoRemovePorLado.put(lado, agoraMs);
+                    sugeriuAcao = true;
                 }
             }
         }
 
+        if (!sugeriuAcao && condAdd && podeAdicionar && nCanhoes < MAX_CANHOES_POR_LADO) {
+            float[] posicao = candidataAdicao;
+            if (posicao == null) {
+                float[] posSugerida = estimarPosicaoAdicao(resultados, lado);
+                posicao = clampParaLado(lado, posSugerida[0], posSugerida[1]);
+            }
+            OnReconciliacaoListener l = getListener();
+            if (l != null) {
+                ReconciliationLog.getInstance().logAIDecision(
+                        "ADICIONAR",
+                        String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms",
+                                (uMais1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS),
+                        posicao[0], posicao[1], uAtual, uMais1);
+                l.onSugestaoAdicionarCanhao(lado, posicao[0], posicao[1]);
+                ultimoAddPorLado.put(lado, agoraMs);
+            }
+        }
+
         ReconciliationLog.getInstance().logUtilityComparison(
-                lado.name(), nCanhoes, uAtual, uMais1, uMenos1, LIMIAR_GANHO, energiaAtual);
+                lado.name(), nCanhoes, uAtual, uMais1, uMenos1, LIMIAR_GANHO_ADICAO, energiaAtual);
     }
 
     private float[][] montarMatrizDistancias(List<Canhao> canhoes, DataReconciliation.ReconciliationResult[] resultados) {

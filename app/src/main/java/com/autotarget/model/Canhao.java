@@ -10,6 +10,51 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Canhão do jogo AutoTarget. Cada canhão opera em sua própria thread,
+ * disparando projéteis em direção aos alvos do seu lado.
+ *
+ * <p><b>Modelo de Penalidade (AV2 — Rubrica §6.2.2-b):</b></p>
+ * <p>
+ * Canhões além do limiar {@link #LIMIAR_PENALIDADE} sofrem penalidade
+ * no intervalo de disparo, modelada pela fórmula:
+ * </p>
+ * <pre>
+ *   I = I_base × (1 + max(0, N - L) × α)
+ * </pre>
+ * <ul>
+ *   <li><b>I</b>: intervalo de disparo efetivo (ms)</li>
+ *   <li><b>I_base</b>: intervalo base ({@link #INTERVALO_DISPARO_BASE} = 1500ms)</li>
+ *   <li><b>N</b>: número de canhões ativos no mesmo lado</li>
+ *   <li><b>L</b>: limiar de penalidade ({@link #LIMIAR_PENALIDADE} = 5)</li>
+ *   <li><b>α</b>: fator de penalidade ({@link #ALPHA_PENALIDADE} = 0.2)</li>
+ * </ul>
+ * <p>
+ * Exemplo: com N=7 canhões ativos no mesmo lado, L=5, α=0.2:
+ * I = 1500 × (1 + max(0, 7-5) × 0.2) = 1500 × 1.4 = 2100ms.
+ * </p>
+ * <p>
+ * Justificativa: o modelo penaliza a expansão excessiva da frota,
+ * criando um trade-off entre poder de fogo e eficiência energética
+ * (cada canhão adicional consome energia e reduz a taxa de disparo
+ * de todos os canhões do mesmo lado).
+ * </p>
+ *
+ * <p><b>Penalidade Térmica (AV3 — Sistema Ciberfísico):</b></p>
+ * <p>
+ * O fator {@link #thermalPenaltyFactor} é injetado pelo {@link com.autotarget.service.ThermalSensorService}
+ * quando a temperatura ambiente excede 40°C:
+ * </p>
+ * <pre>
+ *   sleepMs = intervaloDisparo × thermalPenaltyFactor
+ *   onde thermalPenaltyFactor = 1.0 + (temp - 40) × 0.1
+ * </pre>
+ *
+ * <p><b>Escalonamento RMA (Rate Monotonic Analysis):</b></p>
+ * Tarefa: T6 — Canhao.run (Disparo)
+ * Período P₆ = 1500ms, Execução C₆ = 5ms, Deadline D₆ = 1500ms
+ * Prioridade RM: 6 (Baixa)
+ */
 public class Canhao extends Thread {
     private static final String TAG = "Canhao";
     private float x, y, targetX, targetY;
@@ -43,13 +88,14 @@ public class Canhao extends Thread {
     @Override
     public void run() {
         while (ativo) {
-            long startNs = System.nanoTime();
             try {
+                long startNs = System.nanoTime();
                 disparar();
                 limparProjetisInativos();
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000; // execução sem sleep
+                RMAAnalysis.checkDeadline("T6-Canhao", elapsedMs, intervaloDisparo);
                 long sleepMs = (long) (intervaloDisparo * thermalPenaltyFactor);
                 Thread.sleep(Math.max(sleepMs, 100));
-                RMAAnalysis.checkDeadline("T6-Canhao", (System.nanoTime() - startNs) / 1_000_000, intervaloDisparo);
             } catch (InterruptedException e) {
                 ativo = false;
             } catch (Exception e) {

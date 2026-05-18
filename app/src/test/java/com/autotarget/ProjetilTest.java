@@ -180,7 +180,7 @@ public class ProjetilTest {
     public void testReservaLiberadaAoErrarSaindoDaTela() throws Exception {
         jogo.setDimensoesTela(LARGURA, ALTURA);
         AlvoComum alvo = new AlvoComum(200, 200, 20, 0, LARGURA, ALTURA);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         Canhao c1 = new Canhao(100, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
                 collisionLock, LARGURA, ALTURA, jogo);
@@ -204,7 +204,7 @@ public class ProjetilTest {
     public void testReservaLiberadaAoAcertar() throws Exception {
         jogo.setDimensoesTela(LARGURA, ALTURA);
         AlvoComum alvo = new AlvoComum(100, 100, 20, 0, LARGURA, ALTURA);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         Canhao c1 = new Canhao(80, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
                 collisionLock, LARGURA, ALTURA, jogo);
@@ -225,7 +225,7 @@ public class ProjetilTest {
     public void testReservaLiberadaEmInterrupcaoDoProjetil() throws Exception {
         jogo.setDimensoesTela(LARGURA, ALTURA);
         AlvoComum alvo = new AlvoComum(300, 300, 20, 0, LARGURA, ALTURA);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         Canhao c1 = new Canhao(80, 100, Lado.ESQUERDO, jogo.getAlvosEsquerdo(),
                 collisionLock, LARGURA, ALTURA, jogo);

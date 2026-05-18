@@ -32,6 +32,13 @@ import org.ejml.simple.SimpleMatrix;
 import org.ejml.data.SingularMatrixException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Reconciliação de dados estocásticos via álgebra linear (EJML).
@@ -42,6 +49,28 @@ public class DataReconciliation {
     private static final double LIMIAR_GEOMETRICO_FATOR = 0.85;
     private static final double LIMIAR_CONDICIONAMENTO = 1.0e12;
     private static final double REGULARIZACAO_TIKHONOV = 1.0e-8;
+    public static final String MATRIZ_RESTRICAO_CONTRATO = "LEFT_NULL_SPACE";
+
+    /**
+     * Timeout para operações de SVD (ms).
+     * Previne que a inversão de matrizes na thread de reconciliação
+     * cause ANR indireto (Watchdog timeout do Android).
+     * Valor conservador: 200ms é suficiente para matrizes N≤15.
+     */
+    private static final long SVD_TIMEOUT_MS = 200;
+
+    /** Pool de threads dedicado para operações matriciais pesadas (SVD). */
+    private static final ExecutorService SVD_EXECUTOR =
+            Executors.newFixedThreadPool(2, r -> {
+                Thread t = new Thread(r, "SVD-Worker");
+                t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY); // Não competir com UI/Physics
+                return t;
+            });
+
+    public static String getMatrizRestricaoContrato() {
+        return MATRIZ_RESTRICAO_CONTRATO;
+    }
 
     /**
      * Resultado da reconciliação para um alvo.
@@ -160,7 +189,12 @@ public class DataReconciliation {
             }
 
             double condM = calcularNumeroCondicion(matM);
-            if (!Double.isFinite(condM) || condM > LIMIAR_CONDICIONAMENTO) {
+            boolean malCondicionada = !Double.isFinite(condM) || condM > LIMIAR_CONDICIONAMENTO;
+            
+            ReconciliationLog.getInstance().logConditioning(
+                    "RECONCILIAR_GLOBAL", N, condM, malCondicionada);
+
+            if (malCondicionada) {
                 Log.w(TAG, "Geometria dos canhões mal condicionada (cond=" + condM + ") — fallback para OLS direto");
                 return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
             }
@@ -172,11 +206,6 @@ public class DataReconciliation {
                 Log.w(TAG, "Canhões colineares — fallback para OLS direto");
                 return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
             }
-
-                double cond = calcularNumeroCondicion(matM);
-            ReconciliationLog.getInstance().logConditioning(
-                    "RECONCILIAR", N, cond,
-                    Double.isInfinite(cond) || cond > LIMIAR_CONDICIONAMENTO);
 
             // ── Reconciliar cada alvo independentemente ─────────────
             ReconciliationResult[] results = new ReconciliationResult[M];
@@ -306,6 +335,9 @@ public class DataReconciliation {
         if (Float.isNaN(xHat) || Float.isInfinite(xHat) || Math.abs(xHat) > 10000 || 
             Float.isNaN(yHat_coord) || Float.isInfinite(yHat_coord) || Math.abs(yHat_coord) > 10000) {
             
+            Log.w(TAG, "Reconciliação instável para alvo " + alvoIndex + " (x=" + xHat + ", y=" + yHat_coord + ") — fallback OLS");
+            ReconciliationLog.getInstance().logConditioning("RECON_ALVO_INSTAVEL", N, 999.0, true);
+
             // Re-estimar via OLS direto ignorando o null space instável
             ReconciliationResult fallback = estimarPosicoesDiretas(canhoesX, canhoesY, new float[][]{mediaDist})[0];
             return new ReconciliationResult(fallback.x, fallback.y, mediaDist.clone(), 0.0);
@@ -342,6 +374,8 @@ public class DataReconciliation {
      */
     public static double[] reconcile(double[] y, double[][] V, double[][] A) {
         if (y == null || V == null || A == null || y.length == 0) {
+            Log.w(TAG, "reconcile: entradas inválidas, retornando y original");
+            ReconciliationLog.getInstance().logConditioning("RECONCILE_INVALID_INPUT", 0, Double.NaN, true);
             return y;
         }
 
@@ -364,6 +398,8 @@ public class DataReconciliation {
             try {
                 AVAt_inv = AVAt.pseudoInverse();
             } catch (Exception e) {
+                Log.w(TAG, "reconcile: fallback total (inversão indisponível), retornando y original", e);
+                ReconciliationLog.getInstance().logConditioning("RECONCILE_INVERSION_FAIL", m, Double.NaN, true);
                 return y;
             }
         }
@@ -376,11 +412,15 @@ public class DataReconciliation {
             for (int i = 0; i < y.length; i++) {
                 result[i] = yHat.get(i, 0);
                 if (!Double.isFinite(result[i])) {
+                    Log.w(TAG, "reconcile: valor não finito no resultado, retornando y original");
+                    ReconciliationLog.getInstance().logConditioning("RECONCILE_NON_FINITE", y.length, Double.NaN, true);
                     return y;
                 }
             }
             return result;
         } catch (Exception e) {
+            Log.w(TAG, "reconcile: exceção no cálculo, retornando y original", e);
+            ReconciliationLog.getInstance().logConditioning("RECONCILE_EXCEPTION", y.length, Double.NaN, true);
             return y;
         }
     }
@@ -463,41 +503,6 @@ public class DataReconciliation {
     }
 
     /**
-     * Constrói matriz de incidência A com base em conectividade por limiar:
-     * se d_j < limiar, o canhão j é considerado conectado ao alvo.
-     *
-     * A dimensão de saída é k x (N-1), coerente com o vetor y atual
-     * (diferenças entre canhões 1..N-1 e canhão referência 0).
-     */
-    public static double[][] construirMatrizIncidenciaPorLimiar(float[] mediaDistancias, double limiar) {
-        if (mediaDistancias == null || mediaDistancias.length < 4 || !Double.isFinite(limiar)) {
-            return null;
-        }
-
-        List<Integer> conectados = new ArrayList<>();
-        for (int j = 0; j < mediaDistancias.length; j++) {
-            if (mediaDistancias[j] <= limiar) {
-                conectados.add(j);
-            }
-        }
-
-        if (conectados.size() < 2) {
-            return null;
-        }
-
-        int rows = conectados.size() - 1;
-        int cols = mediaDistancias.length;
-        double[][] A = new double[rows][cols];
-        for (int r = 0; r < rows; r++) {
-            int c1 = conectados.get(r);
-            int c2 = conectados.get(r + 1);
-            A[r][c1] = 1.0;
-            A[r][c2] = -1.0;
-        }
-        return A;
-    }
-
-    /**
      * Calcula o espaço nulo esquerdo de M via SVD.
      * Retorna matriz C de dimensão (N-3)×N.
      */
@@ -518,12 +523,44 @@ public class DataReconciliation {
             }
         }
         try {
-            // SVD: M = U·S·Vᵀ
-            // Espaço nulo esquerdo = últimas (N-rank) colunas de U
+            // SVD: M = U·S·Vᵀ — executado em thread separada com timeout
+            // para prevenir ANR indireto (Android Watchdog)
             long svdStart = System.nanoTime();
-            org.ejml.simple.SimpleSVD<SimpleMatrix> svd = M.svd();
+
+            Future<org.ejml.simple.SimpleSVD<SimpleMatrix>> svdFuture =
+                    SVD_EXECUTOR.submit(new Callable<org.ejml.simple.SimpleSVD<SimpleMatrix>>() {
+                        @Override
+                        public org.ejml.simple.SimpleSVD<SimpleMatrix> call() {
+                            return M.svd();
+                        }
+                    });
+
+            org.ejml.simple.SimpleSVD<SimpleMatrix> svd;
+            try {
+                svd = svdFuture.get(SVD_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                svdFuture.cancel(true);
+                long elapsedMs = (System.nanoTime() - svdStart) / 1_000_000;
+                Log.w(TAG, "SVD TIMEOUT após " + elapsedMs + "ms (limite=" + SVD_TIMEOUT_MS
+                        + "ms) — fallback para OLS");
+                ReconciliationLog.getInstance().logConditioning(
+                        "SVD_TIMEOUT", N, Double.NaN, true);
+                return null;
+            } catch (ExecutionException | InterruptedException e) {
+                Log.w(TAG, "SVD falhou — fallback para OLS", e);
+                ReconciliationLog.getInstance().logConditioning(
+                        "SVD_EXECUTION_FAIL", N, Double.NaN, true);
+                return null;
+            }
+
             long svdElapsedMs = (System.nanoTime() - svdStart) / 1_000_000;
-            Log.i("AUTOTARGET_METRICS_SVD", "SVD duration ms=" + svdElapsedMs + " rows=" + M.getNumRows() + " cols=" + M.getNumCols());
+            Log.i("AUTOTARGET_METRICS_SVD", "SVD duration ms=" + svdElapsedMs
+                    + " rows=" + M.getNumRows() + " cols=" + M.getNumCols());
+
+            if (svdElapsedMs > SVD_TIMEOUT_MS / 2) {
+                Log.w(TAG, "SVD lento detectado: " + svdElapsedMs + "ms para N=" + N);
+            }
+
             SimpleMatrix U = svd.getU();
 
             int rank = 0;

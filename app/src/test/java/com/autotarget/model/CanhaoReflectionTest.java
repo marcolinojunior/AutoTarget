@@ -40,7 +40,7 @@ public class CanhaoReflectionTest {
         // bounceX = 2 (par), offset = 700. aimX = 700.
         
         TestAlvo alvo = new TestAlvo(900, 500, 1, 0, 30); 
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         
         canhao.disparar();
         String log = ReconciliationLog.getInstance().gerarRelatorio();
@@ -59,7 +59,7 @@ public class CanhaoReflectionTest {
         // Vamos usar Cannon em 1000, Alvo em 100 indo para esquerda.
         canhao.setPosicao(1000, 500);
         TestAlvo alvo = new TestAlvo(100, 500, -1, 0, 30);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         // dist=900. vTargetX=-1 (afastando). vProj=1.5.
         // virtualX = 100 - 1800 = -1700.
         // Math.abs(-1700) = 1700. bounceX = 1 (ímpar), offset = 700.
@@ -76,7 +76,7 @@ public class CanhaoReflectionTest {
         // Isso força o alvo a se aproximar do "chão" e rebater.
         canhao.setPosicao(0, 1000);
         TestAlvo alvo = new TestAlvo(0, 900, 0, 1, 600); 
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         
         // dist=100. vProj=1.5. vTargetY=20 (aproximando).
         // a = 20^2 - 1.5^2 = 397.75.
@@ -95,7 +95,7 @@ public class CanhaoReflectionTest {
         canhao.setPosicao(0, 0); // Longe
         alvos.clear();
         alvo = new TestAlvo(0, 900, 0, 1, 600);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         // dist=900. b = 2 * (900 * 20) = 36000. c = 810000.
         // delta = 36000^2 - 4 * 397.75 * 810000 = 1,296,000,000 - 1,288,710,000 = 7,290,000.
         // sqrt(delta) = 2700.
@@ -106,7 +106,7 @@ public class CanhaoReflectionTest {
         canhao.setPosicao(0, 0);
         alvos.clear();
         alvo = new TestAlvo(0, 500, 0, 1, 30); // vTargetY = 1 px/ms. vProj = 1.5 px/ms.
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
         // dist=500. a = 1^2 - 1.5^2 = -1.25.
         // b = 2 * (500 * 1) = 1000. c = 250000.
         // delta = 1000000 - 4 * -1.25 * 250000 = 1000000 + 1250000 = 2250000.

@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import com.autotarget.model.AlvoComum;
 import com.autotarget.model.Canhao;
 import com.autotarget.model.Lado;
 
@@ -51,5 +52,23 @@ public class JogoEnergiaFrotaTest {
             c.pararCanhao();
             c.interrupt();
         }
+    }
+
+    @Test
+    public void testCreditoEnergiaPorAbateAconteceUmaUnicaVez() {
+        Jogo jogo = new Jogo();
+        jogo.setDimensoesTela(1000, 1000);
+        jogo.getEnergyManager(Lado.ESQUERDO).set(10f);
+
+        AlvoComum alvo = new AlvoComum(120, 120, 20, 0, 1000, 1000);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
+        assertTrue(alvo.tentarAbater(Lado.ESQUERDO));
+
+        jogo.verificarColisoes();
+        float aposPrimeiro = jogo.getEnergia(Lado.ESQUERDO);
+        jogo.verificarColisoes();
+        float aposSegundo = jogo.getEnergia(Lado.ESQUERDO);
+
+        assertEquals("Abate deve creditar energia uma única vez", aposPrimeiro, aposSegundo, 0.0001f);
     }
 }

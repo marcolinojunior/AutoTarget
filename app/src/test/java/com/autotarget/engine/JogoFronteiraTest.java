@@ -6,8 +6,8 @@ import static org.junit.Assert.*;
 import com.autotarget.model.Alvo;
 import com.autotarget.model.AlvoComum;
 import com.autotarget.model.Lado;
-import java.util.ArrayList;
-import java.util.List;
+import com.autotarget.model.Projetil;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -19,45 +19,49 @@ import java.util.concurrent.TimeUnit;
 public class JogoFronteiraTest {
 
     @Test
-    public void testStressFronteiraCruzamentoSimultaneo() throws InterruptedException {
-        final int NUM_REPETICOES = 1000;
-        final int LARGURA = 1000;
-        final int ALTURA = 1000;
-        final float MEIO = LARGURA / 2f;
+    public void testStressFronteiraCruzamentoSimultaneo() throws Exception {
+        final int repeticoes = 300;
+        final int largura = 1000;
+        final int altura = 1000;
+        final float meio = largura / 2f;
 
         Jogo jogo = new Jogo();
-        jogo.setDimensoesTela(LARGURA, ALTURA);
+        jogo.setDimensoesTela(largura, altura);
+        java.lang.reflect.Method transferir = Jogo.class.getDeclaredMethod("transferirAlvosCruzados");
+        transferir.setAccessible(true);
 
-        // Alvo posicionado exatamente na fronteira
-        Alvo alvo = new AlvoComum(MEIO, 500, 30, 0, LARGURA, ALTURA);
-        
-        // Simulação de corrida: Thread A tenta transferir, Thread B tenta abater
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        
-        // Simular abates repetidos em alvos na fronteira
-        int abatesSucesso = 0;
-        for (int i = 0; i < NUM_REPETICOES; i++) {
-            Alvo a = new AlvoComum(MEIO, 500, 30, 0, LARGURA, ALTURA);
-            
-            // Thread de "Física" (Transferência)
-            executor.submit(() -> {
-                // Forçar o alvo a oscilar levemente entre lados
-                a.setPosicaoX(MEIO + 1); // Passa para DIREITO
-                // Jogo faria a transferência aqui
-            });
+        for (int i = 0; i < repeticoes; i++) {
+            Alvo alvo = new AlvoComum(meio - 1f, 500, 30, 0, largura, altura);
+            jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
+            alvo.setPosicaoX(meio); // fronteira exata => pertence ao lado direito
 
-            // Thread de "Projétil" (Abate)
-            if (a.tentarAbater(Lado.ESQUERDO)) {
-                abatesSucesso++;
-            }
+            CountDownLatch latch = new CountDownLatch(1);
+            executor.submit(() -> {
+                try {
+                    latch.await();
+                    transferir.invoke(jogo);
+                } catch (Exception ignored) {
+                }
+            });
+            executor.submit(() -> {
+                try {
+                    latch.await();
+                    alvo.tentarAbater(Lado.ESQUERDO);
+                } catch (Exception ignored) {
+                }
+            });
+            latch.countDown();
         }
 
         executor.shutdown();
-        executor.awaitTermination(1, TimeUnit.SECONDS);
+        assertTrue("Execução concorrente deve finalizar", executor.awaitTermination(4, TimeUnit.SECONDS));
 
-        // O teste de stress valida que a flag atômica do Alvo nunca permite duplo abate
-        // e que o sistema permanece consistente.
-        assertTrue("Deve haver registros de abates no stress test", abatesSucesso > 0);
+        for (Alvo alvo : jogo.getAllAlvos()) {
+            assertFalse("Um alvo não pode existir simultaneamente em ambos os lados",
+                    jogo.getAlvosNoLadoSnapshot(Lado.ESQUERDO).contains(alvo)
+                            && jogo.getAlvosNoLadoSnapshot(Lado.DIREITO).contains(alvo));
+        }
     }
     
     @Test
@@ -83,6 +87,33 @@ public class JogoFronteiraTest {
         assertFalse("Um projétil não deve abater alvos que já cruzaram a fronteira.", abateEfetivado);
     }
 
+    @Test
+    public void testIntegracaoProjetilFronteira() throws Exception {
+        // Item 6: Garantir que o Projetil verifica o lado do alvo no momento do impacto
+        int LARGURA = 1000;
+        Jogo jogo = new Jogo();
+        jogo.setDimensoesTela(LARGURA, 1000);
+        
+        // Alvo na fronteira, mas ligeiramente no DIREITO
+        float meio = LARGURA / 2f;
+        Alvo alvo = new AlvoComum(meio + 1f, 500, 0, 0, LARGURA, 1000);
+        java.util.List<Alvo> alvos = new java.util.ArrayList<>();
+        alvos.add(alvo);
+        
+        // Projétil vindo do ESQUERDO
+        Projetil p = new Projetil(
+                meio - 5f, 500f, 1f, 0f, 10f, alvos, jogo.getCollisionLock(), 
+                LARGURA, 1000, jogo, Lado.ESQUERDO, alvo);
+        
+        // Acionar verificação de colisão
+        java.lang.reflect.Method check = p.getClass().getDeclaredMethod("verificarColisoes");
+        check.setAccessible(true);
+        check.invoke(p);
+        
+        assertTrue("Alvo deve continuar ativo pois cruzou a fronteira antes do impacto", alvo.isAtivo());
+        assertTrue("Projétil deve continuar ativo pois o abate foi negado pela regra de lado", p.isAtivo());
+    }
+
             @Test
             public void testCentroExatoPertenceAoLadoDireito() {
                 int LARGURA = 1200;
@@ -104,7 +135,7 @@ public class JogoFronteiraTest {
 
                 float meio = LARGURA / 2f;
                 Alvo alvo = new AlvoComum(meio - 2f, 200f, 20f, 0f, LARGURA, ALTURA);
-                jogo.getAlvosEsquerdo().add(alvo);
+                jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
                 // Empurra o alvo para a fronteira exata; a regra deve levá-lo ao lado direito.
                 alvo.setPosicaoX(meio);
@@ -113,7 +144,7 @@ public class JogoFronteiraTest {
                 transferir.setAccessible(true);
                 transferir.invoke(jogo);
 
-                assertFalse("O alvo deve sair da lista esquerda após cruzar a fronteira", jogo.getAlvosEsquerdo().contains(alvo));
-                assertTrue("O alvo deve aparecer na lista direita após cruzar a fronteira", jogo.getAlvosDireito().contains(alvo));
+                assertFalse("O alvo deve sair da lista esquerda após cruzar a fronteira", jogo.getAlvosNoLadoSnapshot(Lado.ESQUERDO).contains(alvo));
+                assertTrue("O alvo deve aparecer na lista direita após cruzar a fronteira", jogo.getAlvosNoLadoSnapshot(Lado.DIREITO).contains(alvo));
             }
 }

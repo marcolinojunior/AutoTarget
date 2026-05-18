@@ -126,7 +126,7 @@ public class CanhaoTest {
     public void testDisparoComAlvoMesmoLado() {
         AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA);
         alvos.add(alvo);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
                 collisionLock, LARGURA, ALTURA, jogo);
@@ -141,7 +141,7 @@ public class CanhaoTest {
     public void testDisparoIgnoraAlvoOutroLado() {
         AlvoComum alvo = new AlvoComum(600, 200, 20, 3, LARGURA, ALTURA);
         alvos.add(alvo);
-        jogo.getAlvosDireito().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.DIREITO);
 
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
                 collisionLock, LARGURA, ALTURA, jogo);
@@ -160,7 +160,7 @@ public class CanhaoTest {
 
         AlvoComum alvo = new AlvoComum(200, 200, 20, 3, LARGURA, ALTURA);
         alvos.add(alvo);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         canhao.disparar();
         assertEquals(1, canhao.getProjeteis().size());
@@ -192,6 +192,21 @@ public class CanhaoTest {
     }
 
     @Test
+    public void testPenalidadeSegueFormulaExata() {
+        Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
+                collisionLock, LARGURA, ALTURA, jogo);
+        int base = Canhao.getIntervaloDisparoBase();
+        int limiar = Canhao.getLimiarPenalidade();
+        float alpha = Canhao.getAlphaPenalidade();
+
+        int total = limiar + 3;
+        canhao.aplicarPenalidade(total);
+        int esperado = (int) (base * (1.0f + (total - limiar) * alpha));
+        assertEquals("Intervalo deve seguir I = Ibase * (1 + (N-L)*alpha)",
+                esperado, canhao.getIntervaloDisparo());
+    }
+
+    @Test
     public void testDeterminacaoLado() {
         int w = 800;
         assertEquals(Lado.ESQUERDO, Lado.determinar(100, w));
@@ -213,7 +228,7 @@ public class CanhaoTest {
         fieldY.setAccessible(true);
         fieldY.set(alvo, 0f); // targetAim == y
         alvos.add(alvo);
-        jogo.getAlvosEsquerdo().add(alvo);
+        jogo.adicionarAlvoManual(alvo, Lado.ESQUERDO);
 
         Canhao canhao = new Canhao(100, 200, Lado.ESQUERDO, alvos,
                 collisionLock, LARGURA, ALTURA, jogo);

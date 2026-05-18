@@ -178,6 +178,7 @@ public class Projetil implements Runnable {
     public void run() {
         while (ativo) {
             try {
+                long startNs = System.nanoTime();
                 mover();
                 if (foraDosTela()) {
                     ativo = false;
@@ -187,6 +188,8 @@ public class Projetil implements Runnable {
                     break;
                 }
                 verificarColisoes();
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000; // execução sem sleep
+                com.autotarget.util.RMAAnalysis.checkDeadline("T2-Projetil", elapsedMs, INTERVALO_ATUALIZACAO);
                 Thread.sleep(INTERVALO_ATUALIZACAO);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -252,14 +255,6 @@ public class Projetil implements Runnable {
                             ReconciliationLog.getInstance().logShot(
                                     this.x, this.y, alvo.getX(), alvo.getY(),
                                     alvo.getX(), alvo.getY(), true, this.lado.name());
-                            
-                            // AJUSTE AV2: Cap de recompensa em 1.0f para garantir escassez de recursos
-                            float energiaAntes = jogo.getEnergia(this.lado);
-                            float energiaRestaurada = 1.0f; // Reduzido de 5f
-                            jogo.getEnergyManager(this.lado).add(energiaRestaurada);
-                            float energiaApos = jogo.getEnergia(this.lado);
-                            ReconciliationLog.getInstance().logEnergyRestoration(
-                                    this.lado.name(), energiaRestaurada, energiaApos);
                             
                             break;
                         }
