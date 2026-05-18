@@ -22,7 +22,7 @@ public class Canhao extends Thread {
     private final Object collisionLock;
     private final Jogo jogo;
 
-    private static final float VELOCIDADE_PROJETIL = 12f;
+    private static final float VELOCIDADE_PROJETIL = 16f;
     private static final int INTERVALO_DISPARO_BASE = 1500;
     private static final int LIMIAR_PENALIDADE = 5;
     private static final float ALPHA_PENALIDADE = 0.2f;
@@ -101,8 +101,38 @@ public class Canhao extends Thread {
                 }
             }
 
-            float aimX = tX + (t > 0 ? vTargetX * t : 0);
-            float aimY = tY + (t > 0 ? vTargetY * t : 0);
+            // 1. Probabilistic Confidence Filter for AlvoRapido (AV2 Optimization)
+            if (alvoReservado instanceof AlvoRapido && t > 0) {
+                // AlvoRapido changes direction every ~30ms. t is predicted impact time in ms.
+                int ticksDeVoo = (int) (t / 30f);
+                double chanceDeAcerto = Math.pow(0.95, ticksDeVoo);
+                
+                // If confidence is low (<65%), hold fire to save energy
+                if (chanceDeAcerto < 0.65) {
+                    return; 
+                }
+            }
+
+            // 2. Bouncing Reflection Logic (Kinematic Folding)
+            float virtualX = tX + (t > 0 ? vTargetX * t : 0);
+            float virtualY = tY + (t > 0 ? vTargetY * t : 0);
+
+            float aimX = virtualX;
+            float aimY = virtualY;
+
+            // Reflect aim position back into screen bounds if it exceeds them
+            if (larguraTela > 0) {
+                aimX = Math.abs(aimX);
+                int bouncesX = (int) (aimX / larguraTela);
+                float offsetX = aimX % larguraTela;
+                aimX = (bouncesX % 2 != 0) ? (larguraTela - offsetX) : offsetX;
+            }
+            if (alturaTela > 0) {
+                aimY = Math.abs(aimY);
+                int bouncesY = (int) (aimY / alturaTela);
+                float offsetY = aimY % alturaTela;
+                aimY = (bouncesY % 2 != 0) ? (alturaTela - offsetY) : offsetY;
+            }
 
             float dxAim = aimX - this.x;
             float dyAim = aimY - this.y;
@@ -166,6 +196,8 @@ public class Canhao extends Thread {
     public void setLarguraTela(int l) { this.larguraTela = l; }
     public void setAlturaTela(int h) { this.alturaTela = h; }
     public void setThermalPenaltyFactor(float f) { this.thermalPenaltyFactor = f; }
+    public int getLarguraTela() { return larguraTela; }
+    public int getAlturaTela() { return alturaTela; }
     public static int getIntervaloDisparoBase() { return INTERVALO_DISPARO_BASE; }
     public static int getLimiarPenalidade() { return LIMIAR_PENALIDADE; }
     public static float getAlphaPenalidade() { return ALPHA_PENALIDADE; }

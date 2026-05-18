@@ -136,7 +136,7 @@ public class Jogo {
 
     // ── Constantes ───────────────────────────────────────────────
 
-    private static final int MAX_CANHOES_POR_LADO = 10;
+    private static final int MAX_CANHOES_POR_LADO = 15;
     private static final int LIMIAR_PENALIDADE = 5;
     private static final int INTERVALO_SPAWN_ALVO = 3000;
     private static final float RAIO_ALVO = 30f;
@@ -1140,6 +1140,13 @@ public class Jogo {
             this.boundsEsquerdo = new RectF(0, 0, largura / 2f, altura);
             this.boundsDireito = new RectF(largura / 2f, 0, largura, altura);
         }
+
+        // Sincronizar dimensões com os canhões existentes
+        for (Canhao c : getAllCanhoes()) {
+            c.setLarguraTela(largura);
+            c.setAlturaTela(altura);
+        }
+
         if (reconciliacaoThread != null) {
             reconciliacaoThread.setLarguraTela(largura);
             reconciliacaoThread.setAlturaTela(altura);

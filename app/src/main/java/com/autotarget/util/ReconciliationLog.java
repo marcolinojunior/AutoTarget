@@ -27,6 +27,8 @@ public final class ReconciliationLog {
 
     private int totalSpawns;
     private int totalShots;
+    private int totalShotsEsq;
+    private int totalShotsDir;
     private int totalHits;
     private int totalAdditions;
     private int totalRemovals;
@@ -216,6 +218,8 @@ public final class ReconciliationLog {
         performanceMetricsSamples.clear();
         totalSpawns = 0;
         totalShots = 0;
+        totalShotsEsq = 0;
+        totalShotsDir = 0;
         totalHits = 0;
         totalAdditions = 0;
         totalRemovals = 0;
@@ -230,8 +234,11 @@ public final class ReconciliationLog {
 
     public synchronized void logShot(float canhaoX, float canhaoY, float alvoX, float alvoY,
                                      float aimX, float aimY, boolean hit, String lado) {
-        totalShots++;
-        if (hit) {
+        if (!hit) {
+            totalShots++;
+            if ("ESQUERDO".equalsIgnoreCase(lado)) totalShotsEsq++;
+            else if ("DIREITO".equalsIgnoreCase(lado)) totalShotsDir++;
+        } else {
             totalHits++;
             if ("ESQUERDO".equalsIgnoreCase(lado)) totalHitsEsq++;
             else if ("DIREITO".equalsIgnoreCase(lado)) totalHitsDir++;
@@ -405,9 +412,10 @@ public final class ReconciliationLog {
         sb.append("RELATORIO_AUTOTARGET_AV2\n");
         sb.append("====================================\n");
         sb.append(String.format(Locale.US, "Spawns: %d\n", totalSpawns));
-        sb.append(String.format(Locale.US, "Disparos: %d\n", totalShots));
+        int disparosEfetivos = totalShots + totalHits;
+        sb.append(String.format(Locale.US, "Disparos: %d\n", disparosEfetivos));
         sb.append(String.format(Locale.US, "Acertos: %d\n", totalHits));
-        sb.append(String.format(Locale.US, "Taxa de acerto: %.2f%%\n", totalShots == 0 ? 0 : (100.0 * totalHits / totalShots)));
+        sb.append(String.format(Locale.US, "Taxa de acerto: %.2f%%\n", disparosEfetivos == 0 ? 0 : (100.0 * totalHits / disparosEfetivos)));
         sb.append(String.format(Locale.US, "IA adicionou: %d | removeu: %d\n", totalAdditions, totalRemovals));
 
         if (!reconSamples.isEmpty()) {
@@ -572,27 +580,33 @@ public final class ReconciliationLog {
 
         if (!performanceMetricsSamples.isEmpty()) {
             sb.append("\n[EXCELENTE] METRICAS_DESEMPENHO_POR_LADO\n");
-            double taxaAcertoEsq = 0, consumoEnergiEsq = 0;
-            double taxaAcertoDir = 0, consumoEnergiDir = 0;
+            double taxaAcertoEsqMed = 0, consumoEnergiEsq = 0;
+            double taxaAcertoDirMed = 0, consumoEnergiDir = 0;
             int contEsq = 0, contDir = 0;
             for (PerformanceMetricsSample s : performanceMetricsSamples) {
                 if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
-                    taxaAcertoEsq += s.taxaAcertoLado;
+                    taxaAcertoEsqMed += s.taxaAcertoLado;
                     consumoEnergiEsq += s.energiaConsumidaLado;
                     contEsq++;
                 } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
-                    taxaAcertoDir += s.taxaAcertoLado;
+                    taxaAcertoDirMed += s.taxaAcertoLado;
                     consumoEnergiDir += s.energiaConsumidaLado;
                     contDir++;
                 }
             }
+
+            int disparosEsqTotal = totalShotsEsq + totalHitsEsq;
+            int disparosDirTotal = totalShotsDir + totalHitsDir;
+            double taxaAcertoEsqReal = disparosEsqTotal == 0 ? 0 : (100.0 * totalHitsEsq / disparosEsqTotal);
+            double taxaAcertoDirReal = disparosDirTotal == 0 ? 0 : (100.0 * totalHitsDir / disparosDirTotal);
+
             if (contEsq > 0) {
-                sb.append(String.format(Locale.US, "[ESQUERDO] Taxa media de acerto: %.2f%% | Consumo medio: %.1f | Acertos: %d\n",
-                        taxaAcertoEsq / contEsq, consumoEnergiEsq / contEsq, totalHitsEsq));
+                sb.append(String.format(Locale.US, "[ESQUERDO] Taxa real: %.2f%% (Acertos: %d, Disparos: %d) | Taxa media amostrada: %.2f%% | Consumo medio: %.1f\n",
+                        taxaAcertoEsqReal, totalHitsEsq, disparosEsqTotal, taxaAcertoEsqMed / contEsq, consumoEnergiEsq / contEsq));
             }
             if (contDir > 0) {
-                sb.append(String.format(Locale.US, "[DIREITO]  Taxa media de acerto: %.2f%% | Consumo medio: %.1f | Acertos: %d\n",
-                        taxaAcertoDir / contDir, consumoEnergiDir / contDir, totalHitsDir));
+                sb.append(String.format(Locale.US, "[DIREITO]  Taxa real: %.2f%% (Acertos: %d, Disparos: %d) | Taxa media amostrada: %.2f%% | Consumo medio: %.1f\n",
+                        taxaAcertoDirReal, totalHitsDir, disparosDirTotal, taxaAcertoDirMed / contDir, consumoEnergiDir / contDir));
             }
             sb.append("\n[EVIDENCIA] Comparacao de Desempenho Final:\n");
             sb.append(String.format(Locale.US, "Vencedor por Abates: %s (ESQ=%d | DIR=%d)\n",

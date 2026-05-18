@@ -48,8 +48,8 @@ public class ReconciliationLogTest {
         for (int i = 0; i < 2; i++) log.logShot(0, 0, 10, 10, 10, 10, false, "DIREITO");
 
         // Adicionar uma amostra de performance para ativar a seção no relatório
-        log.logPerformanceMetrics("ESQUERDO", 5, 2, 40.0, 10.0, 1);
-        log.logPerformanceMetrics("DIREITO", 10, 8, 80.0, 20.0, 1);
+        log.logPerformanceMetrics("ESQUERDO", 5, 2, 10.0, 1);
+        log.logPerformanceMetrics("DIREITO", 10, 8, 20.0, 1);
 
         String relatorio = log.gerarRelatorio();
 

@@ -24,11 +24,8 @@ public class CanhaoDimensionSyncTest {
         // Mudar dimensões do jogo
         jogo.setDimensoesTela(1920, 1080);
         
-        // Verificar se o canhão foi atualizado via reflexão/acesso
-        // Como larguraTela é private em Canhao, mas temos setters e possivelmente getters
-        // Se não houver getter, precisaremos adicionar um para teste ou confiar no comportamento
-        
-        // Vou adicionar getters em Canhao se não existirem
-        // Olhando o outline anterior, não vi getLarguraTela
+        // Verificar se o canhão foi atualizado
+        assertEquals(1920, canhao.getLarguraTela());
+        assertEquals(1080, canhao.getAlturaTela());
     }
 }
