@@ -22,7 +22,7 @@ public class Canhao extends Thread {
     private final Object collisionLock;
     private final Jogo jogo;
 
-    private static final float VELOCIDADE_PROJETIL = 16f;
+    private static final float VELOCIDADE_PROJETIL = 20f;
     private static final int INTERVALO_DISPARO_BASE = 1500;
     private static final int LIMIAR_PENALIDADE = 5;
     private static final float ALPHA_PENALIDADE = 0.2f;
@@ -80,23 +80,24 @@ public class Canhao extends Thread {
 
         boolean disparoEfetivado = false;
         try {
-            float vTargetX = (tDirX * tVel) / 30f;
-            float vTargetY = (tDirY * tVel) / 30f;
-            float vProj = VELOCIDADE_PROJETIL / 16f;
+            // AJUSTE AV2: Precisão Decimal rigorosa para antecipação balística
+            double vTargetX = (tDirX * tVel) / 30.0;
+            double vTargetY = (tDirY * tVel) / 30.0;
+            double vProj = VELOCIDADE_PROJETIL / 16.0;
 
-            float dx = tX - this.x;
-            float dy = tY - this.y;
+            double dx = (double)tX - this.x;
+            double dy = (double)tY - this.y;
 
-            float a = vTargetX * vTargetX + vTargetY * vTargetY - vProj * vProj;
-            float b = 2 * (dx * vTargetX + dy * vTargetY);
-            float c = dx * dx + dy * dy;
+            double a = vTargetX * vTargetX + vTargetY * vTargetY - vProj * vProj;
+            double b = 2 * (dx * vTargetX + dy * vTargetY);
+            double c = dx * dx + dy * dy;
 
-            float t = 0;
-            if (Math.abs(a) > 0.0001f) {
-                float delta = b * b - 4 * a * c;
+            double t = 0;
+            if (Math.abs(a) > 0.0001) {
+                double delta = b * b - 4 * a * c;
                 if (delta >= 0) {
-                    float t1 = (-b + (float) Math.sqrt(delta)) / (2 * a);
-                    float t2 = (-b - (float) Math.sqrt(delta)) / (2 * a);
+                    double t1 = (-b + Math.sqrt(delta)) / (2 * a);
+                    double t2 = (-b - Math.sqrt(delta)) / (2 * a);
                     t = (t1 > 0 && t2 > 0) ? Math.min(t1, t2) : Math.max(t1, t2);
                 }
             }
@@ -104,7 +105,7 @@ public class Canhao extends Thread {
             // 1. Probabilistic Confidence Filter for AlvoRapido (AV2 Optimization)
             if (alvoReservado instanceof AlvoRapido && t > 0) {
                 // AlvoRapido changes direction every ~30ms. t is predicted impact time in ms.
-                int ticksDeVoo = (int) (t / 30f);
+                int ticksDeVoo = (int) (t / 30.0);
                 double chanceDeAcerto = Math.pow(0.95, ticksDeVoo);
                 
                 // If confidence is low (<65%), hold fire to save energy
@@ -114,41 +115,41 @@ public class Canhao extends Thread {
             }
 
             // 2. Bouncing Reflection Logic (Kinematic Folding)
-            float virtualX = tX + (t > 0 ? vTargetX * t : 0);
-            float virtualY = tY + (t > 0 ? vTargetY * t : 0);
+            double virtualX = tX + (t > 0 ? vTargetX * t : 0);
+            double virtualY = tY + (t > 0 ? vTargetY * t : 0);
 
-            float aimX = virtualX;
-            float aimY = virtualY;
+            double aimX = virtualX;
+            double aimY = virtualY;
 
             // Reflect aim position back into screen bounds if it exceeds them
             if (larguraTela > 0) {
                 aimX = Math.abs(aimX);
                 int bouncesX = (int) (aimX / larguraTela);
-                float offsetX = aimX % larguraTela;
+                double offsetX = aimX % larguraTela;
                 aimX = (bouncesX % 2 != 0) ? (larguraTela - offsetX) : offsetX;
             }
             if (alturaTela > 0) {
                 aimY = Math.abs(aimY);
                 int bouncesY = (int) (aimY / alturaTela);
-                float offsetY = aimY % alturaTela;
+                double offsetY = aimY % alturaTela;
                 aimY = (bouncesY % 2 != 0) ? (alturaTela - offsetY) : offsetY;
             }
 
-            float dxAim = aimX - this.x;
-            float dyAim = aimY - this.y;
-            float dist = (float) Math.sqrt(dxAim * dxAim + dyAim * dyAim);
-            if (dist < 0.1f) return;
+            double dxAim = aimX - this.x;
+            double dyAim = aimY - this.y;
+            double dist = Math.sqrt(dxAim * dxAim + dyAim * dyAim);
+            if (dist < 0.1) return;
 
             this.angulo = (float) Math.toDegrees(Math.atan2(dyAim, dxAim));
             Projetil p = com.autotarget.util.ProjetilPool.obter();
-            p.reutilizar(this.x, this.y, dxAim/dist, dyAim/dist, VELOCIDADE_PROJETIL, alvos, collisionLock, larguraTela, alturaTela, jogo, lado, alvoReservado, this);
+            p.reutilizar(this.x, this.y, (float)(dxAim/dist), (float)(dyAim/dist), VELOCIDADE_PROJETIL, alvos, collisionLock, larguraTela, alturaTela, jogo, lado, alvoReservado, this);
             
             projeteis.add(p);
             projeteisPool.execute(p);
             disparoEfetivado = true;
 
             // FIX 1: Logar o 'aimX' e 'aimY' calculados corretamente, mesmo em caso de acerto futuro
-            ReconciliationLog.getInstance().logShot(this.x, this.y, tX, tY, aimX, aimY, false, lado.name());
+            ReconciliationLog.getInstance().logShot(this.x, this.y, tX, tY, (float)aimX, (float)aimY, false, lado.name());
         } finally {
             if (!disparoEfetivado) jogo.liberarAlvo(alvoReservado);
         }

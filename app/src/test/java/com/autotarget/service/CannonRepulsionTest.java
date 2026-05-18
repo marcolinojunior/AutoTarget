@@ -27,10 +27,7 @@ public class CannonRepulsionTest {
         thread.setAlturaTela(1000);
         
         // Simular resultados de reconciliação que apontariam para (500, 500)
-        DataReconciliation.ReconciliationResult res = new DataReconciliation.ReconciliationResult();
-        res.x = 500;
-        res.y = 500;
-        res.distanciasReconciliadas = new float[]{100f};
+        DataReconciliation.ReconciliationResult res = new DataReconciliation.ReconciliationResult(500f, 500f, new float[]{100f});
         DataReconciliation.ReconciliationResult[] resultados = {res};
         
         // Acessar avaliarCustoBeneficio via reflexão ou testar o efeito final em onSugestaoAdicionarCanhao

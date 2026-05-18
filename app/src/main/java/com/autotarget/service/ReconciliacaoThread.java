@@ -230,7 +230,23 @@ public class ReconciliacaoThread extends Thread {
         Double uMenos1 = null;
 
         if (nCanhoes < MAX_CANHOES_POR_LADO && energiaAtual > ENERGIA_SEGURA_MINIMA) {
-            float[] posicaoHipotetica = estimarPosicaoAdicao(resultados, lado);
+            float[] posSugerida = estimarPosicaoAdicao(resultados, lado);
+            float novoX = posSugerida[0];
+            float novoY = posSugerida[1];
+
+            // AJUSTE AV2: Repulsão Espacial de Sensores (Circular Random) para quebrar colinearidade
+            float distMinima = 150.0f;
+            for (Canhao c : canhoes) {
+                float dx = novoX - c.getX();
+                float dy = novoY - c.getY();
+                if (Math.sqrt(dx * dx + dy * dy) < distMinima) {
+                    double anguloAleatorio = Math.random() * 2 * Math.PI;
+                    novoX = (float) (novoX + distMinima * Math.cos(anguloAleatorio));
+                    novoY = (float) (novoY + distMinima * Math.sin(anguloAleatorio));
+                }
+            }
+            float[] posicaoHipotetica = clampParaLado(lado, novoX, novoY);
+
             float[][] distanciasMais1 = adicionarCandidato(distancias, resultados, posicaoHipotetica[0], posicaoHipotetica[1]);
             uMais1 = DataReconciliation.calcularUtilidade(
                     distanciasMais1, nCanhoes + 1,

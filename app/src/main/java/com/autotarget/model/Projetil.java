@@ -253,9 +253,9 @@ public class Projetil implements Runnable {
                                     this.x, this.y, alvo.getX(), alvo.getY(),
                                     alvo.getX(), alvo.getY(), true, this.lado.name());
                             
-                            // [EXCELENTE] Log de energia restaurada por abate
+                            // AJUSTE AV2: Cap de recompensa em 1.0f para garantir escassez de recursos
                             float energiaAntes = jogo.getEnergia(this.lado);
-                            float energiaRestaurada = 5f; // 5 pontos de energia por abate bem-sucedido
+                            float energiaRestaurada = 1.0f; // Reduzido de 5f
                             jogo.getEnergyManager(this.lado).add(energiaRestaurada);
                             float energiaApos = jogo.getEnergia(this.lado);
                             ReconciliationLog.getInstance().logEnergyRestoration(

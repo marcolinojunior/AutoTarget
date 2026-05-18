@@ -1014,6 +1014,7 @@ public class Jogo {
      */
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
+        // AJUSTE AV2: Cap de recompensa em 1.0f para garantir escassez de recursos
         if (idadeMs < 2000) return 1.0f; // Abate ultra-rápido: sobrevida curta
         if (idadeMs < 4000) return 0.5f; // Abate médio
         if (idadeMs < 7000) return 0.2f; // Abate lento
