@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+
 /**
  * Logger central de auditoria para reconciliação, decisões de IA e métricas da partida.
  */
@@ -26,14 +27,20 @@ public final class ReconciliationLog {
     private final List<PerformanceMetricsSample> performanceMetricsSamples = new ArrayList<>();
 
     private int totalSpawns;
+    private int totalSpawnsEsq;
+    private int totalSpawnsDir;
     private int totalShots;
     private int totalShotsEsq;
     private int totalShotsDir;
     private int totalHits;
-    private int totalAdditions;
-    private int totalRemovals;
     private int totalHitsEsq;
     private int totalHitsDir;
+    private int totalAdditions;
+    private int totalAdditionsEsq;
+    private int totalAdditionsDir;
+    private int totalRemovals;
+    private int totalRemovalsEsq;
+    private int totalRemovalsDir;
 
     public static final class ReconSample {
         public final double mseBruto;
@@ -217,28 +224,37 @@ public final class ReconciliationLog {
         sensorVarianceSamples.clear();
         performanceMetricsSamples.clear();
         totalSpawns = 0;
+        totalSpawnsEsq = 0;
+        totalSpawnsDir = 0;
         totalShots = 0;
         totalShotsEsq = 0;
         totalShotsDir = 0;
         totalHits = 0;
-        totalAdditions = 0;
-        totalRemovals = 0;
         totalHitsEsq = 0;
         totalHitsDir = 0;
+        totalAdditions = 0;
+        totalAdditionsEsq = 0;
+        totalAdditionsDir = 0;
+        totalRemovals = 0;
+        totalRemovalsEsq = 0;
+        totalRemovalsDir = 0;
     }
 
     public synchronized void logSpawn(float x, float y, String tipoAlvo, String lado) {
         totalSpawns++;
+        if ("ESQUERDO".equalsIgnoreCase(lado)) totalSpawnsEsq++;
+        else if ("DIREITO".equalsIgnoreCase(lado)) totalSpawnsDir++;
         appendEvento(String.format(Locale.US, "SPAWN %s lado=%s pos=(%.0f,%.0f)", tipoAlvo, lado, x, y));
     }
 
     public synchronized void logShot(float canhaoX, float canhaoY, float alvoX, float alvoY,
                                      float aimX, float aimY, boolean hit, String lado) {
-        if (!hit) {
-            totalShots++;
-            if ("ESQUERDO".equalsIgnoreCase(lado)) totalShotsEsq++;
-            else if ("DIREITO".equalsIgnoreCase(lado)) totalShotsDir++;
-        } else {
+        // TODO DISPARO (independente de acerto)
+        totalShots++;
+        if ("ESQUERDO".equalsIgnoreCase(lado)) totalShotsEsq++;
+        else if ("DIREITO".equalsIgnoreCase(lado)) totalShotsDir++;
+        // APENAS ACERTOS
+        if (hit) {
             totalHits++;
             if ("ESQUERDO".equalsIgnoreCase(lado)) totalHitsEsq++;
             else if ("DIREITO".equalsIgnoreCase(lado)) totalHitsDir++;
@@ -252,6 +268,16 @@ public final class ReconciliationLog {
                                            double utilAtual, double utilComparativo) {
         if ("ADICIONAR".equalsIgnoreCase(acao)) totalAdditions++;
         if ("REMOVER".equalsIgnoreCase(acao)) totalRemovals++;
+        // Tentar extrair o lado do motivo (ex: "Pressão tática ESQUERDO" ou "Pressão tática DIREITO")
+        String ladoExtraido = extrairLadoDoMotivo(motivo);
+        if ("ADICIONAR".equalsIgnoreCase(acao)) {
+            if ("ESQUERDO".equalsIgnoreCase(ladoExtraido)) totalAdditionsEsq++;
+            else if ("DIREITO".equalsIgnoreCase(ladoExtraido)) totalAdditionsDir++;
+        }
+        if ("REMOVER".equalsIgnoreCase(acao)) {
+            if ("ESQUERDO".equalsIgnoreCase(ladoExtraido)) totalRemovalsEsq++;
+            else if ("DIREITO".equalsIgnoreCase(ladoExtraido)) totalRemovalsDir++;
+        }
         appendEvento(String.format(Locale.US,
                 "AI %s pos=(%.0f,%.0f) U=%.3f U2=%.3f motivo=%s",
                 acao, x, y, utilAtual, utilComparativo, motivo));
@@ -384,6 +410,39 @@ public final class ReconciliationLog {
         return soma / n;
     }
 
+    /**
+     * Calcula médias de reconciliação para uma lista de amostras.
+     * Retorna array: [mseBruto, mseRecon, reducao%, erroPos, normA] ou null se vazio.
+     */
+    private static double[] calcularMediasRecon(List<ReconSample> amostras) {
+        if (amostras == null || amostras.isEmpty()) return null;
+        double mseBruto = 0, mseRecon = 0, erroPos = 0, normA = 0;
+        for (ReconSample s : amostras) {
+            mseBruto += s.mseBruto;
+            mseRecon += s.mseRecon;
+            erroPos += s.erroPos;
+            normA += s.normA;
+        }
+        int n = amostras.size();
+        mseBruto /= n;
+        mseRecon /= n;
+        erroPos /= n;
+        normA /= n;
+        double reducao = mseBruto > 0 ? ((mseBruto - mseRecon) / mseBruto) * 100.0 : 0;
+        return new double[]{mseBruto, mseRecon, reducao, erroPos, normA};
+    }
+
+    /**
+     * Extrai o lado (ESQUERDI/DIREITO) de uma string de motivo da IA.
+     * Ex: "Pressão tática ESQUERDO" -> "ESQUERDO"
+     */
+    private static String extrairLadoDoMotivo(String motivo) {
+        if (motivo == null) return "";
+        if (motivo.contains("ESQUERDO")) return "ESQUERDO";
+        if (motivo.contains("DIREITO")) return "DIREITO";
+        return "";
+    }
+
     private void appendEvento(String evento) {
         eventos.add(evento);
         if (eventos.size() > MAX_EVENTOS) {
@@ -412,18 +471,36 @@ public final class ReconciliationLog {
         StringBuilder sb = new StringBuilder();
         sb.append("RELATORIO_AUTOTARGET_AV2\n");
         sb.append("====================================\n");
-        sb.append(String.format(Locale.US, "Spawns: %d\n", totalSpawns));
-        int disparosEfetivos = totalShots + totalHits;
-        sb.append(String.format(Locale.US, "Disparos: %d\n", disparosEfetivos));
-        sb.append(String.format(Locale.US, "Acertos: %d\n", totalHits));
-        sb.append(String.format(Locale.US, "Taxa de acerto: %.2f%%\n", disparosEfetivos == 0 ? 0 : (100.0 * totalHits / disparosEfetivos)));
-        sb.append(String.format(Locale.US, "IA adicionou: %d | removeu: %d\n", totalAdditions, totalRemovals));
+
+        // --- Cabeçalho separado por lado ---
+        int disparosEsq = totalShotsEsq + totalHitsEsq;
+        int disparosDir = totalShotsDir + totalHitsDir;
+        int disparosGlobal = totalShots + totalHits;
+        double taxaEsq = disparosEsq == 0 ? 0 : (100.0 * totalHitsEsq / disparosEsq);
+        double taxaDir = disparosDir == 0 ? 0 : (100.0 * totalHitsDir / disparosDir);
+        double taxaGlobal = disparosGlobal == 0 ? 0 : (100.0 * totalHits / disparosGlobal);
+
+        sb.append(String.format(Locale.US, "[ESQUERDO] Spawns: %d | Disparos: %d | Acertos: %d | Taxa: %.1f%%\n",
+                totalSpawnsEsq, disparosEsq, totalHitsEsq, taxaEsq));
+        sb.append(String.format(Locale.US, "[DIREITO]  Spawns: %d | Disparos: %d | Acertos: %d | Taxa: %.1f%%\n",
+                totalSpawnsDir, disparosDir, totalHitsDir, taxaDir));
+        sb.append(String.format(Locale.US, "[GLOBAL]   Spawns: %d | Disparos: %d | Acertos: %d | Taxa: %.1f%%\n",
+                totalSpawns, disparosGlobal, totalHits, taxaGlobal));
+        sb.append(String.format(Locale.US, "IA adicionou: ESQ=%d DIR=%d (total=%d) | removeu: ESQ=%d DIR=%d (total=%d)\n",
+                totalAdditionsEsq, totalAdditionsDir, totalAdditions,
+                totalRemovalsEsq, totalRemovalsDir, totalRemovals));
 
         if (!reconSamples.isEmpty()) {
-            double mediaMseBruto = 0;
-            double mediaMseRecon = 0;
-            double mediaErroPos = 0;
-            double mediaNormA = 0;
+            // Separar amostras por lado
+            List<ReconSample> amostrasEsq = new ArrayList<>();
+            List<ReconSample> amostrasDir = new ArrayList<>();
+            for (ReconSample s : reconSamples) {
+                if ("ESQUERDO".equalsIgnoreCase(s.lado)) amostrasEsq.add(s);
+                else if ("DIREITO".equalsIgnoreCase(s.lado)) amostrasDir.add(s);
+            }
+
+            // Calcular médias globais
+            double mediaMseBruto = 0, mediaMseRecon = 0, mediaErroPos = 0, mediaNormA = 0;
             for (ReconSample s : reconSamples) {
                 mediaMseBruto += s.mseBruto;
                 mediaMseRecon += s.mseRecon;
@@ -437,13 +514,22 @@ public final class ReconciliationLog {
             mediaNormA /= n;
             double reducao = mediaMseBruto > 0 ? ((mediaMseBruto - mediaMseRecon) / mediaMseBruto) * 100.0 : 0;
 
+            // Calcular médias por lado
+            double[] mediasEsq = calcularMediasRecon(amostrasEsq);
+            double[] mediasDir = calcularMediasRecon(amostrasDir);
+
             sb.append("\nMETRICAS_RECONCILIACAO\n");
-            sb.append(String.format(Locale.US, "Amostras: %d\n", n));
-            sb.append(String.format(Locale.US, "MSE bruto medio: %.4f\n", mediaMseBruto));
-            sb.append(String.format(Locale.US, "MSE reconciliado medio: %.4f\n", mediaMseRecon));
-            sb.append(String.format(Locale.US, "Reducao media de MSE: %.2f%%\n", reducao));
-            sb.append(String.format(Locale.US, "Erro medio de posicao: %.2f px\n", mediaErroPos));
-            sb.append(String.format(Locale.US, "Norma media ||A*y_hat||: %.6f\n", mediaNormA));
+            sb.append(String.format(Locale.US, "Amostras: %d (ESQ=%d, DIR=%d)\n", n, amostrasEsq.size(), amostrasDir.size()));
+            sb.append(String.format(Locale.US, "[GLOBAL]   MSE bruto medio: %.4f | MSE recon: %.4f | Reducao: %.2f%% | ErroPos: %.2f px | NormA: %.6f\n",
+                    mediaMseBruto, mediaMseRecon, reducao, mediaErroPos, mediaNormA));
+            if (mediasEsq != null) {
+                sb.append(String.format(Locale.US, "[ESQUERDO] MSE bruto medio: %.4f | MSE recon: %.4f | Reducao: %.2f%% | ErroPos: %.2f px | NormA: %.6f\n",
+                        mediasEsq[0], mediasEsq[1], mediasEsq[2], mediasEsq[3], mediasEsq[4]));
+            }
+            if (mediasDir != null) {
+                sb.append(String.format(Locale.US, "[DIREITO]  MSE bruto medio: %.4f | MSE recon: %.4f | Reducao: %.2f%% | ErroPos: %.2f px | NormA: %.6f\n",
+                        mediasDir[0], mediasDir[1], mediasDir[2], mediasDir[3], mediasDir[4]));
+            }
             sb.append("\n[EVIDENCIA C0-07] Comparacao Antes/Depois (Bruto vs Reconciliado):\n");
             for (int i = 0; i < n; i += Math.max(1, n / 5)) {
                 ReconSample s = reconSamples.get(i);
@@ -495,26 +581,53 @@ public final class ReconciliationLog {
             sb.append("\nMETRICAS_OTIMIZACAO_UTILIDADE\n");
             sb.append(String.format(Locale.US, "Amostras: %d\n", utilitySamples.size()));
             int ganhosAcimaLimiar = 0;
+            int ganhosAcimaLimiarEsq = 0, ganhosAcimaLimiarDir = 0;
+            int contEsq = 0, contDir = 0;
             for (UtilitySample s : utilitySamples) {
                 if (s.uMais1 != null && (s.uMais1 - s.uAtual) > s.limiarGanho) {
                     ganhosAcimaLimiar++;
+                    if ("ESQUERDO".equalsIgnoreCase(s.lado)) ganhosAcimaLimiarEsq++;
+                    else if ("DIREITO".equalsIgnoreCase(s.lado)) ganhosAcimaLimiarDir++;
                 }
+                if ("ESQUERDO".equalsIgnoreCase(s.lado)) contEsq++;
+                else if ("DIREITO".equalsIgnoreCase(s.lado)) contDir++;
             }
-            sb.append(String.format(Locale.US, "Ganhos marginais U(N+1)-U(N) acima do limiar: %d\n", ganhosAcimaLimiar));
+            sb.append(String.format(Locale.US, "[GLOBAL]   Ganhos marginais U(N+1)-U(N) acima do limiar: %d\n", ganhosAcimaLimiar));
+            sb.append(String.format(Locale.US, "[ESQUERDO] Ganhos marginais acima do limiar: %d (amostras: %d)\n", ganhosAcimaLimiarEsq, contEsq));
+            sb.append(String.format(Locale.US, "[DIREITO]  Ganhos marginais acima do limiar: %d (amostras: %d)\n", ganhosAcimaLimiarDir, contDir));
         }
 
         if (!conditioningSamples.isEmpty()) {
             sb.append("\nMETRICAS_CONDICIONAMENTO_NUMERICO\n");
             double mediaCond = 0;
             int fallbackCount = 0;
+            double mediaCondEsq = 0, mediaCondDir = 0;
+            int fallbackEsq = 0, fallbackDir = 0;
+            int contEsq = 0, contDir = 0;
             for (ConditioningSample s : conditioningSamples) {
                 mediaCond += s.conditionNumber;
                 if (s.usouFallback) fallbackCount++;
+                if (s.contexto != null && s.contexto.contains("ESQ")) {
+                    mediaCondEsq += s.conditionNumber;
+                    if (s.usouFallback) fallbackEsq++;
+                    contEsq++;
+                } else if (s.contexto != null && s.contexto.contains("DIR")) {
+                    mediaCondDir += s.conditionNumber;
+                    if (s.usouFallback) fallbackDir++;
+                    contDir++;
+                }
             }
             mediaCond /= conditioningSamples.size();
             sb.append(String.format(Locale.US, "Amostras: %d\n", conditioningSamples.size()));
-            sb.append(String.format(Locale.US, "Condition number medio: %.3e\n", mediaCond));
-            sb.append(String.format(Locale.US, "Fallbacks acionados: %d\n", fallbackCount));
+            sb.append(String.format(Locale.US, "[GLOBAL]   Condition number medio: %.3e | Fallbacks: %d\n", mediaCond, fallbackCount));
+            if (contEsq > 0) {
+                mediaCondEsq /= contEsq;
+                sb.append(String.format(Locale.US, "[ESQUERDO] Condition number medio: %.3e | Fallbacks: %d\n", mediaCondEsq, fallbackEsq));
+            }
+            if (contDir > 0) {
+                mediaCondDir /= contDir;
+                sb.append(String.format(Locale.US, "[DIREITO]  Condition number medio: %.3e | Fallbacks: %d\n", mediaCondDir, fallbackDir));
+            }
         }
 
         if (!energyRestorationSamples.isEmpty()) {
@@ -615,11 +728,169 @@ public final class ReconciliationLog {
                     totalHitsEsq, totalHitsDir));
         }
 
+        // ── H7: Relatório RMA estruturado ──
+        sb.append("\n[EXCELENTE] ANALISE_RMA_TEMPO_REAL\n");
+        String rmaReport = RMAAnalysis.getRuntimeMetricsReport();
+        if (rmaReport != null && rmaReport.length() > "RUNTIME_METRICS\n".length()) {
+            sb.append(rmaReport);
+        } else {
+            sb.append("Nenhuma métrica de runtime RMA coletada.\n");
+        }
+
         sb.append("\nEVENTOS_RECENTES\n");
         int from = Math.max(0, eventos.size() - 40);
         for (int i = from; i < eventos.size(); i++) {
             sb.append("- ").append(eventos.get(i)).append('\n');
         }
         return sb.toString();
+    }
+
+    // ── TELEMETRIA CSV (Exigência "Excelente" — AV2) ─────────────────────
+
+    /**
+     * Exporta todos os dados de telemetria em arquivos CSV estruturados
+     * para geração de gráficos no relatório PDF.
+     *
+     * Arquivos gerados:
+     *   - telemetry_reconciliation.csv: MSE bruto, MSE reconciliado, erro posicional, normA
+     *   - telemetry_energy_penalty.csv: energia por lado, canhões, intervalo de disparo
+     *   - telemetry_rma_runtime.csv: Ci observado, deadline misses por tarefa
+     *   - telemetry_sensor_variance.csv: variância dos sensores por lado
+     *   - telemetry_utility.csv: função de utilidade U(N) por ciclo
+     *
+     * @param context Context do Android para acesso ao armazenamento interno
+     * @return lista de nomes dos arquivos gerados
+     */
+    public synchronized java.util.List<String> exportarCSV(android.content.Context context) {
+        java.util.List<String> arquivos = new java.util.ArrayList<>();
+        if (context == null) return arquivos;
+
+        // 1. CSV de Reconciliação
+        try {
+            String filename = "telemetry_reconciliation.csv";
+            StringBuilder sb = new StringBuilder();
+            sb.append("Index,MSE_Bruto,MSE_Reconciliado,Reducao_Pct,Erro_Posicional_px,NormA_yHat,Lado\n");
+            for (int i = 0; i < reconSamples.size(); i++) {
+                ReconSample s = reconSamples.get(i);
+                double reducao = s.mseBruto > 0 ? ((s.mseBruto - s.mseRecon) / s.mseBruto) * 100.0 : 0;
+                sb.append(String.format(Locale.US, "%d,%.6f,%.6f,%.2f,%.4f,%.8f,%s\n",
+                        i, s.mseBruto, s.mseRecon, reducao, s.erroPos, s.normA, s.lado));
+            }
+            writeCSV(context, filename, sb.toString());
+            arquivos.add(filename);
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de reconciliação", e);
+        }
+
+        // 2. CSV de Energia e Penalidade
+        try {
+            String filename = "telemetry_energy_penalty.csv";
+            StringBuilder sb = new StringBuilder();
+            sb.append("Index,Energia_Esq,Energia_Dir,Canhoes_Esq,Canhoes_Dir,Intervalo_Esq_ms,Intervalo_Dir_ms\n");
+            for (int i = 0; i < energySamples.size(); i++) {
+                EnergyPenaltySample s = energySamples.get(i);
+                sb.append(String.format(Locale.US, "%d,%.2f,%.2f,%d,%d,%.2f,%.2f\n",
+                        i, s.energiaEsq, s.energiaDir, s.canhoesEsq, s.canhoesDir,
+                        s.intervaloEsqMs, s.intervaloDirMs));
+            }
+            writeCSV(context, filename, sb.toString());
+            arquivos.add(filename);
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de energia", e);
+        }
+
+        // 3. CSV de RMA Runtime Metrics
+        try {
+            String filename = "telemetry_rma_runtime.csv";
+            String rmaCSV = RMAAnalysis.getRuntimeMetricsReport();
+            if (rmaCSV != null && !rmaCSV.isEmpty()) {
+                writeCSV(context, filename, rmaCSV);
+                arquivos.add(filename);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de RMA", e);
+        }
+
+        // 4. CSV de Variância dos Sensores
+        try {
+            String filename = "telemetry_sensor_variance.csv";
+            StringBuilder sb = new StringBuilder();
+            sb.append("Index,Lado,Media_X,Var_X,Media_Y,Var_Y,Media_VelX,Var_VelX,Media_VelY,Var_VelY\n");
+            for (int i = 0; i < sensorVarianceSamples.size(); i++) {
+                SensorVarianceSample s = sensorVarianceSamples.get(i);
+                sb.append(String.format(Locale.US, "%d,%s,%.4f,%.6f,%.4f,%.6f,%.4f,%.6f,%.4f,%.6f\n",
+                        i, s.lado, s.mediaX, s.varX, s.mediaY, s.varY,
+                        s.mediaVelX, s.varVelX, s.mediaVelY, s.varVelY));
+            }
+            writeCSV(context, filename, sb.toString());
+            arquivos.add(filename);
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de sensores", e);
+        }
+
+        // 5. CSV de Utilidade U(N)
+        try {
+            String filename = "telemetry_utility.csv";
+            StringBuilder sb = new StringBuilder();
+            sb.append("Index,Lado,N_Canhoes,U_Atual,U_Mais1,U_Menos1,Limiar_Ganho,Energia_Lado\n");
+            for (int i = 0; i < utilitySamples.size(); i++) {
+                UtilitySample s = utilitySamples.get(i);
+                sb.append(String.format(Locale.US, "%d,%s,%d,%.6f,%s,%s,%.4f,%.2f\n",
+                        i, s.lado, s.nCanhoes, s.uAtual,
+                        s.uMais1 != null ? String.format(Locale.US, "%.6f", s.uMais1) : "N/A",
+                        s.uMenos1 != null ? String.format(Locale.US, "%.6f", s.uMenos1) : "N/A",
+                        s.limiarGanho, s.energiaLado));
+            }
+            writeCSV(context, filename, sb.toString());
+            arquivos.add(filename);
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de utilidade", e);
+        }
+
+        // 6. CSV de Restauração de Energia
+        try {
+            String filename = "telemetry_energy_restoration.csv";
+            StringBuilder sb = new StringBuilder();
+            sb.append("Index,Lado,Energia_Restaurada,Energia_Apos,Abates_Cumulativos\n");
+            for (int i = 0; i < energyRestorationSamples.size(); i++) {
+                EnergyRestorationSample s = energyRestorationSamples.get(i);
+                sb.append(String.format(Locale.US, "%d,%s,%.2f,%.2f,%d\n",
+                        i, s.lado, s.energiaRestaurada, s.energiaApos, s.alvosAbatidosCumulativo));
+            }
+            writeCSV(context, filename, sb.toString());
+            arquivos.add(filename);
+        } catch (Exception e) {
+            android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de restauração", e);
+        }
+
+        android.util.Log.i("TelemetryCSV",
+                "Telemetria exportada: " + arquivos.size() + " arquivos CSV gerados");
+        return arquivos;
+    }
+
+    /**
+     * Escreve conteúdo em um arquivo CSV no armazenamento interno do app.
+     */
+    private static void writeCSV(android.content.Context context, String filename, String content) throws java.io.IOException {
+        try (java.io.FileOutputStream fos = context.openFileOutput(filename, android.content.Context.MODE_PRIVATE)) {
+            fos.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            android.util.Log.i("TelemetryCSV", "CSV gerado: " + filename
+                    + " (" + content.length() + " bytes)");
+        }
+    }
+
+    /**
+     * Retorna a lista de nomes dos arquivos CSV gerados na última exportação.
+     * Útil para a UI listar e compartilhar os arquivos.
+     */
+    public static String[] getCSVFilenames() {
+        return new String[]{
+                "telemetry_reconciliation.csv",
+                "telemetry_energy_penalty.csv",
+                "telemetry_rma_runtime.csv",
+                "telemetry_sensor_variance.csv",
+                "telemetry_utility.csv",
+                "telemetry_energy_restoration.csv"
+        };
     }
 }

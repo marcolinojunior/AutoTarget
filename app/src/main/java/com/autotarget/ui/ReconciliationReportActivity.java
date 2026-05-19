@@ -71,6 +71,20 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             Toast.makeText(this, "Logs copiados para a área de transferência!", Toast.LENGTH_SHORT).show();
         });
 
+        // AV2 EXCELENTE: Botão para exportar telemetria em CSV
+        Button btnExportCSV = findViewById(R.id.btnExportCSV);
+        btnExportCSV.setOnClickListener(v -> {
+            java.util.List<String> csvFiles = ReconciliationLog.getInstance().exportarCSV(this);
+            com.autotarget.util.RMAAnalysis.exportDeadlineMissesToCSV(this);
+            if (csvFiles.isEmpty()) {
+                Toast.makeText(this, "Nenhum dado para exportar.", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this,
+                        "✅ " + csvFiles.size() + " CSVs exportados para armazenamento interno!",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+
         TextView tvResumoAdaptativo = new TextView(this);
         tvResumoAdaptativo.setTextSize(14f);
         tvResumoAdaptativo.setLineSpacing(8f, 1.05f);
@@ -178,40 +192,36 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             return;
         }
 
-        List<Entry> entriesAtual = new ArrayList<>();
-        List<Entry> entriesMais1 = new ArrayList<>();
-        List<Entry> entriesMenos1 = new ArrayList<>();
+        // Cores padronizadas: Ciano = Esquerdo, Vermelho = Direito
+        final int COLOR_ESQ = Color.parseColor("#00B4D8");
+        final int COLOR_DIR = Color.parseColor("#E94560");
+
+        List<Entry> entriesEsq = new ArrayList<>();
+        List<Entry> entriesDir = new ArrayList<>();
+        int idxEsq = 0, idxDir = 0;
 
         for (int i = 0; i < samples.size(); i++) {
             ReconciliationLog.UtilitySample s = samples.get(i);
-            entriesAtual.add(new Entry(i, (float) s.uAtual));
-            if (s.uMais1 != null) {
-                entriesMais1.add(new Entry(i, s.uMais1.floatValue()));
-            }
-            if (s.uMenos1 != null) {
-                entriesMenos1.add(new Entry(i, s.uMenos1.floatValue()));
+            if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
+                entriesEsq.add(new Entry(idxEsq++, (float) s.uAtual));
+            } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
+                entriesDir.add(new Entry(idxDir++, (float) s.uAtual));
             }
         }
 
-        LineDataSet setAtual = new LineDataSet(entriesAtual, "U(N)");
-        setAtual.setColor(Color.parseColor("#00B4D8"));
-        setAtual.setCircleColor(Color.parseColor("#00B4D8"));
-        setAtual.setLineWidth(2f);
-        setAtual.setValueTextColor(Color.WHITE);
+        LineDataSet setEsq = new LineDataSet(entriesEsq, "U(N) Esq");
+        setEsq.setColor(COLOR_ESQ);
+        setEsq.setCircleColor(COLOR_ESQ);
+        setEsq.setLineWidth(2f);
+        setEsq.setValueTextColor(Color.WHITE);
 
-        LineDataSet setMais1 = new LineDataSet(entriesMais1, "U(N+1)");
-        setMais1.setColor(Color.parseColor("#4CAF50"));
-        setMais1.setCircleColor(Color.parseColor("#4CAF50"));
-        setMais1.setLineWidth(2f);
-        setMais1.setValueTextColor(Color.WHITE);
+        LineDataSet setDir = new LineDataSet(entriesDir, "U(N) Dir");
+        setDir.setColor(COLOR_DIR);
+        setDir.setCircleColor(COLOR_DIR);
+        setDir.setLineWidth(2f);
+        setDir.setValueTextColor(Color.WHITE);
 
-        LineDataSet setMenos1 = new LineDataSet(entriesMenos1, "U(N-1)");
-        setMenos1.setColor(Color.parseColor("#FF9800"));
-        setMenos1.setCircleColor(Color.parseColor("#FF9800"));
-        setMenos1.setLineWidth(2f);
-        setMenos1.setValueTextColor(Color.WHITE);
-
-        chart.setData(new LineData(setAtual, setMais1, setMenos1));
+        chart.setData(new LineData(setEsq, setDir));
         chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
         chart.getXAxis().setTextColor(Color.WHITE);
         chart.getAxisLeft().setTextColor(Color.WHITE);
@@ -229,30 +239,38 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             return;
         }
 
-        List<Entry> entriesCond = new ArrayList<>();
-        List<Entry> entriesFallback = new ArrayList<>();
+        final int COLOR_ESQ = Color.parseColor("#00B4D8");
+        final int COLOR_DIR = Color.parseColor("#E94560");
+
+        List<Entry> entriesEsq = new ArrayList<>();
+        List<Entry> entriesDir = new ArrayList<>();
+        int idxEsq = 0, idxDir = 0;
+
         for (int i = 0; i < samples.size(); i++) {
             ReconciliationLog.ConditioningSample s = samples.get(i);
             float valor = Double.isFinite(s.conditionNumber)
                     ? (float) Math.log10(Math.max(1.0, s.conditionNumber))
                     : 12f;
-            entriesCond.add(new Entry(i, valor));
-            entriesFallback.add(new Entry(i, s.usouFallback ? valor : 0f));
+            if (s.contexto != null && (s.contexto.contains("ESQ") || s.contexto.endsWith("_ESQUERDO"))) {
+                entriesEsq.add(new Entry(idxEsq++, valor));
+            } else if (s.contexto != null && (s.contexto.contains("DIR") || s.contexto.endsWith("_DIREITO"))) {
+                entriesDir.add(new Entry(idxDir++, valor));
+            }
         }
 
-        LineDataSet setCond = new LineDataSet(entriesCond, "log10(cond)");
-        setCond.setColor(Color.parseColor("#00B4D8"));
-        setCond.setCircleColor(Color.parseColor("#00B4D8"));
-        setCond.setLineWidth(2f);
-        setCond.setValueTextColor(Color.WHITE);
+        LineDataSet setEsq = new LineDataSet(entriesEsq, "log10(cond) Esq");
+        setEsq.setColor(COLOR_ESQ);
+        setEsq.setCircleColor(COLOR_ESQ);
+        setEsq.setLineWidth(2f);
+        setEsq.setValueTextColor(Color.WHITE);
 
-        LineDataSet setFallback = new LineDataSet(entriesFallback, "fallback");
-        setFallback.setColor(Color.parseColor("#E94560"));
-        setFallback.setCircleColor(Color.parseColor("#E94560"));
-        setFallback.setLineWidth(2f);
-        setFallback.setValueTextColor(Color.WHITE);
+        LineDataSet setDir = new LineDataSet(entriesDir, "log10(cond) Dir");
+        setDir.setColor(COLOR_DIR);
+        setDir.setCircleColor(COLOR_DIR);
+        setDir.setLineWidth(2f);
+        setDir.setValueTextColor(Color.WHITE);
 
-        chart.setData(new LineData(setCond, setFallback));
+        chart.setData(new LineData(setEsq, setDir));
         chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
         chart.getXAxis().setTextColor(Color.WHITE);
         chart.getAxisLeft().setTextColor(Color.WHITE);
@@ -270,32 +288,39 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             return;
         }
 
-        List<Entry> entriesAntes = new ArrayList<>();
-        List<Entry> entriesDepois = new ArrayList<>();
-        int step = Math.max(1, samples.size() / 100);
-        int idx = 0;
+        final int COLOR_ESQ = Color.parseColor("#00B4D8");
+        final int COLOR_DIR = Color.parseColor("#E94560");
+
+        // 2 séries: erro posicional reconciliado por lado (mais limpo visualmente)
+        List<Entry> entriesEsq = new ArrayList<>();
+        List<Entry> entriesDir = new ArrayList<>();
+        int idxEsq = 0, idxDir = 0;
+        int step = Math.max(1, samples.size() / 80);
+
         for (int i = 0; i < samples.size(); i += step) {
             ReconciliationLog.ReconSample s = samples.get(i);
-            float erroAntesAprox = (float) Math.sqrt(Math.max(0.0, s.mseBruto));
-            float erroDepois = (float) s.erroPos;
-            entriesAntes.add(new Entry(idx, erroAntesAprox));
-            entriesDepois.add(new Entry(idx, erroDepois));
-            idx++;
+            if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
+                entriesEsq.add(new Entry(idxEsq++, (float) s.erroPos));
+            } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
+                entriesDir.add(new Entry(idxDir++, (float) s.erroPos));
+            }
         }
 
-        LineDataSet setAntes = new LineDataSet(entriesAntes, "Erro antes (aprox)");
-        setAntes.setColor(Color.parseColor("#FF9800"));
-        setAntes.setCircleColor(Color.parseColor("#FF9800"));
-        setAntes.setLineWidth(2f);
-        setAntes.setValueTextColor(Color.WHITE);
+        LineDataSet setEsq = new LineDataSet(entriesEsq, "Erro Posicional Esq (px)");
+        setEsq.setColor(COLOR_ESQ);
+        setEsq.setCircleColor(COLOR_ESQ);
+        setEsq.setLineWidth(2f);
+        setEsq.setValueTextColor(Color.WHITE);
+        setEsq.setDrawCircles(false);
 
-        LineDataSet setDepois = new LineDataSet(entriesDepois, "Erro depois");
-        setDepois.setColor(Color.parseColor("#4CAF50"));
-        setDepois.setCircleColor(Color.parseColor("#4CAF50"));
-        setDepois.setLineWidth(2f);
-        setDepois.setValueTextColor(Color.WHITE);
+        LineDataSet setDir = new LineDataSet(entriesDir, "Erro Posicional Dir (px)");
+        setDir.setColor(COLOR_DIR);
+        setDir.setCircleColor(COLOR_DIR);
+        setDir.setLineWidth(2f);
+        setDir.setValueTextColor(Color.WHITE);
+        setDir.setDrawCircles(false);
 
-        chart.setData(new LineData(setAntes, setDepois));
+        chart.setData(new LineData(setEsq, setDir));
         chart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
         chart.getXAxis().setTextColor(Color.WHITE);
         chart.getAxisLeft().setTextColor(Color.WHITE);
@@ -316,102 +341,96 @@ public class ReconciliationReportActivity extends AppCompatActivity {
                     "Ação sugerida: execute uma partida completa para gerar energia, reconciliação e utilidade.";
         }
 
-        float energiaInicial = energySamples.isEmpty() ? 0f : energySamples.get(0).energiaEsq + energySamples.get(0).energiaDir;
+        // ── Energia por lado ──
+        float energiaInicialEsq = energySamples.isEmpty() ? 0f : energySamples.get(0).energiaEsq;
+        float energiaInicialDir = energySamples.isEmpty() ? 0f : energySamples.get(0).energiaDir;
         ReconciliationLog.EnergyPenaltySample ultimoEnergy = energySamples.isEmpty() ? null : energySamples.get(energySamples.size() - 1);
-        float energiaFinal = ultimoEnergy == null ? energiaInicial : ultimoEnergy.energiaEsq + ultimoEnergy.energiaDir;
-        double taxaQuedaEnergia = energySamples.size() > 1
-                ? (energiaInicial - energiaFinal) / Math.max(1, energySamples.size() - 1)
-                : 0.0;
+        float energiaFinalEsq = ultimoEnergy == null ? energiaInicialEsq : ultimoEnergy.energiaEsq;
+        float energiaFinalDir = ultimoEnergy == null ? energiaInicialDir : ultimoEnergy.energiaDir;
+        int canhoesFinaisEsq = ultimoEnergy == null ? 0 : ultimoEnergy.canhoesEsq;
+        int canhoesFinaisDir = ultimoEnergy == null ? 0 : ultimoEnergy.canhoesDir;
 
-        double mediaReducaoRecon = 0.0;
-        double mediaErroPos = 0.0;
+        // ── Reconciliação por lado ──
+        double reducaoEsq = 0, reducaoDir = 0, erroPosEsq = 0, erroPosDir = 0;
+        int contEsq = 0, contDir = 0;
         if (!reconSamples.isEmpty()) {
-            for (ReconciliationLog.ReconSample sample : reconSamples) {
-                double reducao = sample.mseBruto > 0 ? ((sample.mseBruto - sample.mseRecon) / sample.mseBruto) * 100.0 : 0.0;
-                mediaReducaoRecon += reducao;
-                mediaErroPos += sample.erroPos;
+            for (ReconciliationLog.ReconSample s : reconSamples) {
+                double reducao = s.mseBruto > 0 ? ((s.mseBruto - s.mseRecon) / s.mseBruto) * 100.0 : 0.0;
+                if ("ESQUERDO".equalsIgnoreCase(s.lado)) { reducaoEsq += reducao; erroPosEsq += s.erroPos; contEsq++; }
+                else if ("DIREITO".equalsIgnoreCase(s.lado)) { reducaoDir += reducao; erroPosDir += s.erroPos; contDir++; }
             }
-            mediaReducaoRecon /= reconSamples.size();
-            mediaErroPos /= reconSamples.size();
+            if (contEsq > 0) { reducaoEsq /= contEsq; erroPosEsq /= contEsq; }
+            if (contDir > 0) { reducaoDir /= contDir; erroPosDir /= contDir; }
         }
 
-        double mediaDeltaMais1 = 0.0;
-        double mediaDeltaMenos1 = 0.0;
-        int utilMais1 = 0;
-        int utilMenos1 = 0;
-        for (ReconciliationLog.UtilitySample sample : utilitySamples) {
-            if (sample.uMais1 != null) {
-                mediaDeltaMais1 += (sample.uMais1 - sample.uAtual);
-                utilMais1++;
-            }
-            if (sample.uMenos1 != null) {
-                mediaDeltaMenos1 += (sample.uMenos1 - sample.uAtual);
-                utilMenos1++;
+        // ── Utilidade por lado ──
+        double deltaMais1Esq = 0, deltaMenos1Esq = 0, deltaMais1Dir = 0, deltaMenos1Dir = 0;
+        int contUtilEsq = 0, contUtilDir = 0;
+        for (ReconciliationLog.UtilitySample s : utilitySamples) {
+            if ("ESQUERDO".equalsIgnoreCase(s.lado)) {
+                if (s.uMais1 != null) deltaMais1Esq += (s.uMais1 - s.uAtual);
+                if (s.uMenos1 != null) deltaMenos1Esq += (s.uMenos1 - s.uAtual);
+                contUtilEsq++;
+            } else if ("DIREITO".equalsIgnoreCase(s.lado)) {
+                if (s.uMais1 != null) deltaMais1Dir += (s.uMais1 - s.uAtual);
+                if (s.uMenos1 != null) deltaMenos1Dir += (s.uMenos1 - s.uAtual);
+                contUtilDir++;
             }
         }
-        if (utilMais1 > 0) mediaDeltaMais1 /= utilMais1;
-        if (utilMenos1 > 0) mediaDeltaMenos1 /= utilMenos1;
+        if (contUtilEsq > 0) { deltaMais1Esq /= contUtilEsq; deltaMenos1Esq /= contUtilEsq; }
+        if (contUtilDir > 0) { deltaMais1Dir /= contUtilDir; deltaMenos1Dir /= contUtilDir; }
 
-        int condicionamentosAltos = 0;
+        // ── Condicionamento ──
         int fallbacks = 0;
-        for (ReconciliationLog.ConditioningSample sample : conditioningSamples) {
-            if (!Double.isFinite(sample.conditionNumber) || sample.conditionNumber > 1.0e12) {
-                condicionamentosAltos++;
-            }
-            if (sample.usouFallback) {
-                fallbacks++;
-            }
+        for (ReconciliationLog.ConditioningSample s : conditioningSamples) {
+            if (s.usouFallback) fallbacks++;
         }
 
-        String verdict;
-        String acao;
-        String motivo;
-
-        boolean energiaApertada = energiaFinal < Math.max(20f, energiaInicial * 0.25f) || taxaQuedaEnergia > 2.0;
-        boolean reconEficiente = mediaReducaoRecon > 15.0 && mediaErroPos < 35.0;
-        boolean geometriaInstavel = condicionamentosAltos > 0 || fallbacks > 0;
-        boolean adicionarCompensa = mediaDeltaMais1 > 0.01 && !energiaApertada && !geometriaInstavel;
-        boolean removerCompensa = mediaDeltaMenos1 > 0.01 || energiaApertada;
-
-        if (adicionarCompensa && !removerCompensa) {
-            verdict = "Diagnóstico: o sistema está em zona de expansão controlada.";
-            acao = "Próxima ação: considerar adicionar canhões nos clusters com maior ganho marginal.";
-            motivo = String.format(java.util.Locale.US,
-                    "Utilidade média favorece U(N+1) em %.3f, com energia ainda folgada e condicionamento estável.",
-                    mediaDeltaMais1);
-        } else if (removerCompensa) {
-            verdict = "Diagnóstico: o sistema está operando perto do limite energético.";
-            acao = "Próxima ação: remover ou realocar canhões de menor contribuição antes que o desempenho caia.";
-            motivo = String.format(java.util.Locale.US,
-                    "U(N-1) ficou melhor em %.3f e a energia final caiu para %.1f.",
-                    mediaDeltaMenos1, energiaFinal);
-        } else {
-            verdict = "Diagnóstico: o sistema está em equilíbrio tático.";
-            acao = "Próxima ação: manter a frota atual e priorizar realocação fina.";
-            motivo = String.format(java.util.Locale.US,
-                    "Reconciliação média de %.1f%% e utilidade marginal próxima do limiar indicam estabilidade.",
-                    mediaReducaoRecon);
-        }
-
+        // ── Diagnóstico por lado ──
         StringBuilder sb = new StringBuilder();
-        sb.append(verdict).append('\n');
-        sb.append(acao).append('\n');
-        sb.append(motivo).append('\n');
-        sb.append(String.format(java.util.Locale.US,
-                "Energia inicial/final: %.1f -> %.1f | Queda média: %.2f por amostra\n",
-                energiaInicial, energiaFinal, taxaQuedaEnergia));
-        sb.append(String.format(java.util.Locale.US,
-                "Reconciliação: redução média de MSE %.1f%% | erro posicional médio %.2f px\n",
-                mediaReducaoRecon, mediaErroPos));
-        sb.append(String.format(java.util.Locale.US,
-                "Utilidade: ΔU(N+1)=%.3f | ΔU(N-1)=%.3f | Fallbacks numéricos=%d\n",
-                mediaDeltaMais1, mediaDeltaMenos1, fallbacks));
+        sb.append("=== DIAGNÓSTICO POR LADO ===\n\n");
 
-        if (geometriaInstavel) {
-            sb.append("Atenção: a geometria está numericamente sensível; redistribuir canhões ajuda a estabilizar a reconciliação.");
+        // ESQUERDO
+        sb.append("[ESQUERDO]\n");
+        sb.append(String.format(java.util.Locale.US,
+                "  Energia: %.1f -> %.1f | Canhões finais: %d\n", energiaInicialEsq, energiaFinalEsq, canhoesFinaisEsq));
+        sb.append(String.format(java.util.Locale.US,
+                "  Recon: redução %.1f%% | Erro posicional: %.1f px\n", reducaoEsq, erroPosEsq));
+        sb.append(String.format(java.util.Locale.US,
+                "  Utilidade: ΔU(N+1)=%.3f | ΔU(N-1)=%.3f\n", deltaMais1Esq, deltaMenos1Esq));
+        boolean esqEnergiaCrítica = energiaFinalEsq < 10f;
+        boolean esqReconFraca = reducaoEsq < 5.0;
+        boolean esqStarvation = canhoesFinaisEsq == 0;
+        if (esqStarvation) sb.append("  ⚠ ALERTA: STARVATION — sem canhões ativos!\n");
+        else if (esqEnergiaCrítica) sb.append("  ⚠ Energia crítica — risco de parada iminente.\n");
+        if (esqReconFraca && contEsq > 0) sb.append("  ⚠ Reconciliação ineficiente — verificar geometria dos canhões.\n");
+
+        sb.append("\n[DIREITO]\n");
+        sb.append(String.format(java.util.Locale.US,
+                "  Energia: %.1f -> %.1f | Canhões finais: %d\n", energiaInicialDir, energiaFinalDir, canhoesFinaisDir));
+        sb.append(String.format(java.util.Locale.US,
+                "  Recon: redução %.1f%% | Erro posicional: %.1f px\n", reducaoDir, erroPosDir));
+        sb.append(String.format(java.util.Locale.US,
+                "  Utilidade: ΔU(N+1)=%.3f | ΔU(N-1)=%.3f\n", deltaMais1Dir, deltaMenos1Dir));
+        boolean dirEnergiaCrítica = energiaFinalDir < 10f;
+        boolean dirReconFraca = reducaoDir < 5.0;
+        boolean dirStarvation = canhoesFinaisDir == 0;
+        if (dirStarvation) sb.append("  ⚠ ALERTA: STARVATION — sem canhões ativos!\n");
+        else if (dirEnergiaCrítica) sb.append("  ⚠ Energia crítica — risco de parada iminente.\n");
+        if (dirReconFraca && contDir > 0) sb.append("  ⚠ Reconciliação ineficiente — verificar geometria dos canhões.\n");
+
+        // ── Veredicto global ──
+        sb.append("\n[VEREDICTO GLOBAL]\n");
+        boolean algumStarvation = esqStarvation || dirStarvation;
+        boolean algumaReconFraca = (esqReconFraca && contEsq > 0) || (dirReconFraca && contDir > 0);
+        if (algumStarvation) {
+            sb.append("⚠ Um dos lados sofreu STARVATION total. Verificar equilíbrio de energia e número de canhões.\n");
+        } else if (algumaReconFraca) {
+            sb.append("⚠ Reconciliação ineficiente em pelo menos um lado. Redistribuir canhões pode melhorar.\n");
         } else {
-            sb.append("A geometria está estável o suficiente para apoiar decisões táticas automáticas.");
+            sb.append("✓ Sistema operando dentro dos parâmetros esperados.\n");
         }
+        sb.append(String.format(java.util.Locale.US, "Fallbacks numéricos: %d\n", fallbacks));
 
         return sb.toString();
     }
@@ -424,34 +443,46 @@ public class ReconciliationReportActivity extends AppCompatActivity {
             return;
         }
 
-        List<BarEntry> entriesBruto = new ArrayList<>();
-        List<BarEntry> entriesRecon = new ArrayList<>();
+        final int COLOR_ESQ = Color.parseColor("#00B4D8");
+        final int COLOR_DIR = Color.parseColor("#E94560");
 
-        // Para evitar poluição visual, pegar até 20 amostras bem distribuídas
-        int step = Math.max(1, samples.size() / 20);
-        int index = 0;
+        // Gráfico simplificado: MSE reconciliado por lado (barras agrupadas por slot de tempo)
+        // Cada slot no eixo X representa uma amostra temporal; barras lado a lado = Esq vs Dir
+        List<BarEntry> entriesEsq = new ArrayList<>();
+        List<BarEntry> entriesDir = new ArrayList<>();
 
-        for (int i = 0; i < samples.size(); i += step) {
-            ReconciliationLog.ReconSample s = samples.get(i);
-            entriesBruto.add(new BarEntry(index, (float) s.mseBruto));
-            entriesRecon.add(new BarEntry(index, (float) s.mseRecon));
-            index++;
+        int maxSlots = 15;
+        int step = Math.max(1, samples.size() / maxSlots);
+
+        int idx = 0;
+        for (int i = 0; i < samples.size() && idx < maxSlots; i += step) {
+            // Para cada slot, calcular média de MSE reconciliado de cada lado
+            double somaEsq = 0, somaDir = 0;
+            int contEsq = 0, contDir = 0;
+            int windowEnd = Math.min(i + step, samples.size());
+            for (int j = i; j < windowEnd; j++) {
+                ReconciliationLog.ReconSample s = samples.get(j);
+                if ("ESQUERDO".equalsIgnoreCase(s.lado)) { somaEsq += s.mseRecon; contEsq++; }
+                else if ("DIREITO".equalsIgnoreCase(s.lado)) { somaDir += s.mseRecon; contDir++; }
+            }
+            if (contEsq > 0) entriesEsq.add(new BarEntry(idx, (float) (somaEsq / contEsq)));
+            if (contDir > 0) entriesDir.add(new BarEntry(idx, (float) (somaDir / contDir)));
+            idx++;
         }
 
-        BarDataSet setBruto = new BarDataSet(entriesBruto, "MSE Bruto");
-        setBruto.setColor(Color.parseColor("#FF9800"));
-        setBruto.setValueTextColor(Color.WHITE);
+        BarDataSet setEsq = new BarDataSet(entriesEsq, "MSE Recon Esq");
+        setEsq.setColor(COLOR_ESQ);
+        setEsq.setValueTextColor(Color.WHITE);
 
-        BarDataSet setRecon = new BarDataSet(entriesRecon, "MSE Reconciliado");
-        setRecon.setColor(Color.parseColor("#4CAF50"));
-        setRecon.setValueTextColor(Color.WHITE);
+        BarDataSet setDir = new BarDataSet(entriesDir, "MSE Recon Dir");
+        setDir.setColor(COLOR_DIR);
+        setDir.setValueTextColor(Color.WHITE);
 
-        float groupSpace = 0.08f;
-        float barSpace = 0.06f; // x2 dataset
-        float barWidth = 0.40f; // x2 dataset
-        // (0.40 + 0.06) * 2 + 0.08 = 1.00
+        float groupSpace = 0.30f;
+        float barSpace = 0.05f;
+        float barWidth = 0.30f;
 
-        BarData data = new BarData(setBruto, setRecon);
+        BarData data = new BarData(setEsq, setDir);
         data.setBarWidth(barWidth);
 
         chart.setData(data);
@@ -462,7 +493,7 @@ public class ReconciliationReportActivity extends AppCompatActivity {
         chart.getXAxis().setGranularity(1f);
         chart.getXAxis().setCenterAxisLabels(true);
         chart.getXAxis().setAxisMinimum(0f);
-        chart.getXAxis().setAxisMaximum(index);
+        chart.getXAxis().setAxisMaximum(idx);
 
         chart.getAxisLeft().setTextColor(Color.WHITE);
         chart.getAxisRight().setEnabled(false);

@@ -52,7 +52,8 @@ public class ReconciliacaoThread extends Thread {
     private volatile int ciclosTaticos;
     private volatile int larguraTela;
     private volatile int alturaTela;
-    private OnReconciliacaoListener listener;
+    // AV2: volatile garante visibilidade do listener entre threads (main thread seta, ReconciliacaoThread lê)
+    private volatile OnReconciliacaoListener listener;
     private final EnumMap<Lado, Long> ultimoAddPorLado = new EnumMap<>(Lado.class);
     private final EnumMap<Lado, Long> ultimoRemovePorLado = new EnumMap<>(Lado.class);
 
@@ -97,9 +98,19 @@ public class ReconciliacaoThread extends Thread {
             avaliarPressaoTatica(Lado.DIREITO);
             long ultimoCicloReconciliacaoMs = System.currentTimeMillis();
 
+            // H6 FIX: Compensação de deriva temporal para STR
+            // Usa System.nanoTime() para medir o tempo real de execução e ajustar
+            // o próximo sleep para manter o período preciso de INTERVALO_TATICO.
+            long proximoCicloNs = System.nanoTime();
+
             while (ativo) {
                 try {
-                    Thread.sleep(INTERVALO_TATICO);
+                    // Calcular quanto tempo esperar descontando a execução anterior
+                    long agoraNs = System.nanoTime();
+                    long esperaNs = proximoCicloNs - agoraNs;
+                    if (esperaNs > 0) {
+                        Thread.sleep(esperaNs / 1_000_000, (int) (esperaNs % 1_000_000));
+                    }
                     if (!ativo) break;
 
                     long startNs = System.nanoTime();
@@ -114,10 +125,15 @@ public class ReconciliacaoThread extends Thread {
 
                     long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
                     RMAAnalysis.checkDeadline("T8-Reconciliacao", elapsedMs, INTERVALO_RECONCILIACAO);
+
+                    // Agendar próximo ciclo com período fixo a partir do início deste
+                    proximoCicloNs = startNs + (long) INTERVALO_TATICO * 1_000_000L;
                 } catch (InterruptedException e) {
                     ativo = false;
                 } catch (Exception e) {
                     Log.e(TAG, "Erro no loop tático", e);
+                    // Em caso de erro, agendar próximo ciclo normalmente
+                    proximoCicloNs = System.nanoTime() + (long) INTERVALO_TATICO * 1_000_000L;
                 }
             }
         } catch (Exception e) {
@@ -147,7 +163,7 @@ public class ReconciliacaoThread extends Thread {
 
         for (SensorThread.TargetSnapshot snap : targets) {
             DataReconciliation.ReconciliationResult[] results = 
-                    dataReconciliation.reconciliar(snap.canhoesX, snap.canhoesY, snap.mediaD, snap.varD);
+                    dataReconciliation.reconciliar(snap.canhoesX, snap.canhoesY, snap.mediaD, snap.varD, lado.name());
             
             if (results != null && results.length > 0) {
                 DataReconciliation.ReconciliationResult r = results[0];
@@ -315,8 +331,8 @@ public class ReconciliacaoThread extends Thread {
                 if (l != null) {
                     ReconciliationLog.getInstance().logAIDecision(
                             "REMOVER",
-                            String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms",
-                                    (uMenos1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS),
+                            String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms lado=%s",
+                                    (uMenos1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS, lado.name()),
                             canhaoRemover.getX(), canhaoRemover.getY(), uAtual, uMenos1);
                     l.onSugestaoRemoverCanhao(lado, canhaoRemover);
                     ultimoRemovePorLado.put(lado, agoraMs);
@@ -335,8 +351,8 @@ public class ReconciliacaoThread extends Thread {
             if (l != null) {
                 ReconciliationLog.getInstance().logAIDecision(
                         "ADICIONAR",
-                        String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms",
-                                (uMais1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS),
+                        String.format(Locale.US, "DeltaU=%.4f energia=%.1f cooldown=%dms lado=%s",
+                                (uMais1 - uAtual), energiaAtual, COOLDOWN_DECISAO_MS, lado.name()),
                         posicao[0], posicao[1], uAtual, uMais1);
                 l.onSugestaoAdicionarCanhao(lado, posicao[0], posicao[1]);
                 ultimoAddPorLado.put(lado, agoraMs);
@@ -502,7 +518,8 @@ public class ReconciliacaoThread extends Thread {
 
             if (Alvo.calcularDistancia(c.getX(), c.getY(), finalClamped[0], finalClamped[1]) > 10) {
                 c.moverPara(finalClamped[0], finalClamped[1]);
-                if (listener != null) listener.onRealocarCanhao(c, finalClamped[0], finalClamped[1]);
+                OnReconciliacaoListener l = getListener();
+                if (l != null) l.onRealocarCanhao(c, finalClamped[0], finalClamped[1]);
             }
         }
     }
@@ -516,7 +533,8 @@ public class ReconciliacaoThread extends Thread {
 
     private void semearCanhoesIniciais(Lado lado) {
         float x = lado == Lado.DIREITO ? larguraTela * 0.75f : larguraTela * 0.25f;
-        if (listener != null) listener.onSugestaoAdicionarCanhao(lado, x, alturaTela * 0.5f);
+        OnReconciliacaoListener l = getListener();
+        if (l != null) l.onSugestaoAdicionarCanhao(lado, x, alturaTela * 0.5f);
     }
 
     private void logReconciliationResults(DataReconciliation.ReconciliationResult[] results, float[] cX, float[] cY, float[][] mediaD, float[] vX, float[] vY, int nC, Lado lado) {

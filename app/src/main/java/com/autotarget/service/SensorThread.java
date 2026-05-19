@@ -762,7 +762,8 @@ public class SensorThread extends Thread {
                     }
                 }
                 for (int j = 0; j < N; j++) {
-                    varD[j] = Math.max(varD[j] / history.samples.size(), 0.01f);
+                    // AV2: Variância amostral usa divisor (N-1) — correção de Bessel
+                    varD[j] = Math.max(varD[j] / Math.max(1, history.samples.size() - 1), 0.01f);
                 }
 
                 results.add(new TargetSnapshot(entry.getKey(), new float[][]{mediaD}, new float[][]{varD},

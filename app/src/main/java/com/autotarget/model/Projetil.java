@@ -230,6 +230,11 @@ public class Projetil implements Runnable {
      * com um alvo por vez, evitando condições de corrida.
      */
     private void verificarColisoes() {
+        // AV2: Dados de acerto capturados dentro do lock, log emitido fora para minimizar retenção
+        float hitProjX = 0, hitProjY = 0, hitAlvoX = 0, hitAlvoY = 0;
+        boolean acertou = false;
+
+        // LOCK_ORDER: collisionLock (nível 1) — nunca adquirir sensorLock dentro deste bloco
         synchronized (collisionLock) {
             com.autotarget.util.QuadTree qt = jogo.getQuadTree(this.lado);
             List<Alvo> candidatos;
@@ -251,16 +256,21 @@ public class Projetil implements Runnable {
                             // Tiro ACERTOU — limpar reserva (alvo destruído)
                             jogo.liberarAlvo(alvo);
                             if (owner != null) owner.onProjetilFinished(this);
-                            // Log de acerto para auditoria
-                            ReconciliationLog.getInstance().logShot(
-                                    this.x, this.y, alvo.getX(), alvo.getY(),
-                                    alvo.getX(), alvo.getY(), true, this.lado.name());
-                            
+                            // Capturar dados para log fora do lock
+                            hitProjX = this.x; hitProjY = this.y;
+                            hitAlvoX = alvo.getX(); hitAlvoY = alvo.getY();
+                            acertou = true;
                             break;
                         }
                     }
                 }
             }
+        }
+        // AV2: Log de acerto FORA do collisionLock para minimizar tempo de retenção do lock
+        if (acertou) {
+            ReconciliationLog.getInstance().logShot(
+                    hitProjX, hitProjY, hitAlvoX, hitAlvoY,
+                    hitAlvoX, hitAlvoY, true, this.lado.name());
         }
     }
 

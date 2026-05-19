@@ -112,7 +112,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Controlador central do jogo AutoTarget.
@@ -473,6 +472,13 @@ public class Jogo {
         // Gerar relatório de reconciliação
         String relatorio = ReconciliationLog.getInstance().gerarRelatorio();
 
+        // AV2 EXCELENTE: Exportar telemetria completa em CSV para gráficos do relatório
+        if (context != null) {
+            java.util.List<String> csvFiles = ReconciliationLog.getInstance().exportarCSV(context);
+            RMAAnalysis.exportDeadlineMissesToCSV(context);
+            Log.i("DEBUG_JOGO", "Telemetria exportada: " + csvFiles.size() + " CSVs + RMA deadlines");
+        }
+
         notificarEstado();
         notificarTempo();
 
@@ -682,12 +688,6 @@ public class Jogo {
                 Alvo alvo = listaAlvos.get(i);
                 if (!alvo.isAtivo()) continue;
 
-                // Bloqueio apenas na janela inicial da partida: durante os primeiros 10s
-                // os canhões aguardam dados mínimos de reconciliação antes de gastar tiros.
-                if (estado == Estado.RODANDO && tempoRestante > (DURACAO_PARTIDA_SEGUNDOS - 10)) {
-                    continue;
-                }
-
                 // Verificar se já está reservado por OUTRO canhão
                 Canhao dono = reservasAlvos.get(alvo);
                 if (dono != null && dono != canhao && dono.isAtivo()) {
@@ -872,6 +872,7 @@ public class Jogo {
 
         com.autotarget.engine.GameGeometry geom = com.autotarget.engine.GameGeometry.forScreen(larguraTela, alturaTela);
 
+        // LOCK_ORDER: listLock (nível 2) — transferência atômica de alvos entre lados
         synchronized (listLock) {
             // FIX: Melhoria Técnica: Preemption Leak nos Buffers
             transferBufferDireita.clear();
@@ -910,6 +911,7 @@ public class Jogo {
     public int verificarColisoes() {
         // Reconstruir QuadTree (Otimização AV4)
         if (useQuadTree && larguraTela > 0 && alturaTela > 0 && boundsEsquerdo != null) {
+            // LOCK_ORDER: collisionLock (nível 1) → listLock (nível 2)
             synchronized (collisionLock) {
                 synchronized (listLock) {
                     quadTreeEsquerdo = new QuadTree(0, boundsEsquerdo);
@@ -930,6 +932,7 @@ public class Jogo {
         }
 
         int destruidos = 0;
+        // LOCK_ORDER: collisionLock (nível 1) → listLock (nível 2)
         synchronized (collisionLock) {
             // FIX: Correção Crítica: Race Condition na Verificação de Colisões
             synchronized (listLock) {
@@ -976,13 +979,18 @@ public class Jogo {
         for (int i = 0; i < lista.size(); i++) {
             Alvo alvo = lista.get(i);
             if (!alvo.isAtivo()) {
-                // REGRA DE DETERMINISMO (AV2): Somente contabiliza o ponto se o
-                // ladoAbate registrado no alvo for o mesmo que estamos processando.
-                // Isso evita dupla contagem ou atribuição ao lado errado durante cruzamento.
-                if (alvo.getLadoAbate() == ladoSendoProcessado) {
-                    restaurarEnergiaPorAbate(alvo, ladoSendoProcessado);
-                    abatesConfirmadosLado++;
+                Lado ladoAbate = alvo.getLadoAbate();
+                if (ladoAbate != null) {
+                    // H1 FIX: Contabilizar o abate para o lado registrado em ladoAbate,
+                    // independentemente de qual lado está processando a lista.
+                    // Isso garante que alvos transferidos no frame exato do abate
+                    // ainda contem pontos para o lado correto.
+                    restaurarEnergiaPorAbate(alvo, ladoAbate);
+                    if (ladoAbate == ladoSendoProcessado) {
+                        abatesConfirmadosLado++;
+                    }
                 }
+                // Se ladoAbate é null (alvo inativo por outra razão), apenas remover sem pontuar
                 removidos.add(alvo);
                 liberarAlvo(alvo);
             }
@@ -1009,10 +1017,10 @@ public class Jogo {
      */
     private int calcularPontosAbate(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
-        if (idadeMs < 2000) return 5;
-        if (idadeMs < 4000) return 3;
-        if (idadeMs < 7000) return 1;
-        return 0; // Penalidade máxima: 0 pontos
+        if (idadeMs < 2000) return 5;   // Abate ultra-rápido: bônus máximo
+        if (idadeMs < 4000) return 3;   // Abate rápido: bônus parcial
+        if (idadeMs < 7000) return 2;   // Abate médio: pontuação padrão
+        return 1;                        // Abate lento: pontuação mínima (nunca 0)
     }
 
     /**
@@ -1025,11 +1033,17 @@ public class Jogo {
      */
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
-        // AJUSTE AV2: Cap de recompensa em 1.0f para garantir escassez de recursos
-        if (idadeMs < 2000) return 2.0f; // Abate ultra-rápido: sobrevida curta
-        if (idadeMs < 4000) return 0.5f; // Abate médio
-        if (idadeMs < 7000) return 0.2f; // Abate lento
-        return 0.1f;                      // Muito lento: recuperação insignificante
+        // H5 FIX: Modelo balanceado — abates rápidos geram lucro energético,
+        // abates médios compensam o consumo base, abates lentos dão sobrevida mínima.
+        // Consumo base = 1f/s por canhão. Com 5 canhões = 5f/s.
+        // Abate <2s: +3.0f (lucro líquido com 5 canhões em 2s: 3.0 - 10.0 = -7.0, mas compensa em volume)
+        // Abate <4s: +1.5f (quase compensa 5 canhões em 4s: 1.5 - 20.0 = -18.5, mas com múltiplos abates acumula)
+        // Abate <7s: +0.8f (recuperação parcial)
+        // Abate >7s: +0.3f (sobrevida mínima)
+        if (idadeMs < 2000) return 3.0f;
+        if (idadeMs < 4000) return 1.5f;
+        if (idadeMs < 7000) return 0.8f;
+        return 0.3f;
     }
 
     // ── Helpers ──────────────────────────────────────────────────

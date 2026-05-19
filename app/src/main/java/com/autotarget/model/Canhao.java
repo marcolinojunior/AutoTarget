@@ -57,8 +57,11 @@ import java.util.concurrent.Executors;
  */
 public class Canhao extends Thread {
     private static final String TAG = "Canhao";
-    private float x, y, targetX, targetY;
-    private boolean movendo;
+    // AV1: volatile garante visibilidade entre threads (render thread lê, physics thread escreve)
+    private volatile float x, y;
+    // AV2: volatile para safe publication entre ReconciliacaoThread (escrita) e PhysicsTimer (leitura)
+    private volatile float targetX, targetY;
+    private volatile boolean movendo;
     private float angulo;
     private volatile boolean ativo;
     private final Lado lado;
@@ -228,7 +231,12 @@ public class Canhao extends Thread {
         else { x += (dx/d)*VELOCIDADE_MOVIMENTO; y += (dy/d)*VELOCIDADE_MOVIMENTO; }
     }
 
-    public void pararCanhao() { this.ativo = false; for (Projetil p : projeteis) p.setAtivo(false); }
+    public void pararCanhao() {
+        this.ativo = false;
+        for (Projetil p : projeteis) p.setAtivo(false);
+        // AV2: Liberar ExecutorService para evitar leak de threads ao parar canhão
+        projeteisPool.shutdownNow();
+    }
 
     public float getX() { return x; }
     public float getY() { return y; }

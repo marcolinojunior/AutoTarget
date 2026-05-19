@@ -108,6 +108,15 @@
                 android:text="Copiar Logs"
                 android:textColor="#FFFFFF"
                 android:backgroundTint="#E94560" />
+
+            <Button
+                android:id="@+id/btnExportCSV"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Exportar CSV"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#00B4D8"
+                android:layout_marginStart="8dp" />
         </LinearLayout>
 
         <LinearLayout

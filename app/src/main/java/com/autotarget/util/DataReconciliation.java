@@ -163,6 +163,24 @@ public class DataReconciliation {
     public ReconciliationResult[] reconciliar(
             float[] canhoesX, float[] canhoesY,
             float[][] mediaDistancias, float[][] varDistancias) {
+        return reconciliar(canhoesX, canhoesY, mediaDistancias, varDistancias, null);
+    }
+
+    /**
+     * Executa reconciliação completa para todos os alvos, com identificação do lado.
+     *
+     * @param canhoesX       posições X dos canhões (N)
+     * @param canhoesY       posições Y dos canhões (N)
+     * @param mediaDistancias  média das distâncias d̄_ij [M][N]
+     * @param varDistancias    variância amostral s²_ij [M][N]
+     * @param lado           lado do campo (ESQUERDO/DIREITO) para logging separado, ou null
+     * @return array de resultados reconciliados, ou null se falhar
+     */
+    public ReconciliationResult[] reconciliar(
+            float[] canhoesX, float[] canhoesY,
+            float[][] mediaDistancias, float[][] varDistancias, String lado) {
+
+        String sufixoLado = (lado != null && !lado.isEmpty()) ? "_" + lado.toUpperCase() : "_GLOBAL";
 
         int N = canhoesX.length;    // número de canhões
         int M = mediaDistancias.length; // número de alvos
@@ -173,10 +191,6 @@ public class DataReconciliation {
             return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
         }
 
-        if (M == 0) {
-            Log.w(TAG, "Nenhum alvo para reconciliar");
-            return new ReconciliationResult[0];
-        }
 
         try {
             // ── Passo 3: Construir Matriz M (N×3) ──────────────────
@@ -192,7 +206,7 @@ public class DataReconciliation {
             boolean malCondicionada = !Double.isFinite(condM) || condM > LIMIAR_CONDICIONAMENTO;
             
             ReconciliationLog.getInstance().logConditioning(
-                    "RECONCILIAR_GLOBAL", N, condM, malCondicionada);
+                    "RECONCILIAR" + sufixoLado, N, condM, malCondicionada);
 
             if (malCondicionada) {
                 Log.w(TAG, "Geometria dos canhões mal condicionada (cond=" + condM + ") — fallback para OLS direto");
@@ -201,7 +215,7 @@ public class DataReconciliation {
 
             // ── Passo 4: Espaço nulo esquerdo de M ─────────────────
             // dim(null space esquerdo) = M_rows - rank(M) = N - 3
-            SimpleMatrix C = computeLeftNullSpace(matM, M_rows);
+            SimpleMatrix C = computeLeftNullSpace(matM, M_rows, sufixoLado);
             if (C == null) {
                 Log.w(TAG, "Canhões colineares — fallback para OLS direto");
                 return estimarPosicoesDiretas(canhoesX, canhoesY, mediaDistancias);
@@ -213,7 +227,7 @@ public class DataReconciliation {
             for (int i = 0; i < M; i++) {
                 results[i] = reconciliarAlvo(i, N, canhoesX, canhoesY,
                         mediaDistancias[i], varDistancias[i],
-                        C, matM, 0f, 0f);
+                        C, matM, 0f, 0f, sufixoLado);
             }
 
             Log.i(TAG, "Reconciliação concluída: " + M + " alvos processados");
@@ -277,7 +291,7 @@ public class DataReconciliation {
             float[] canhoesX, float[] canhoesY,
             float[] mediaDist, float[] varDist,
             SimpleMatrix C, SimpleMatrix matM,
-            float offsetX, float offsetY) {
+            float offsetX, float offsetY, String sufixoLado) {
 
         int M_rows = N;
         // ── Passo 1 e 2: Vetor y_i e Matriz V_i ─────────────────
@@ -336,7 +350,7 @@ public class DataReconciliation {
             Float.isNaN(yHat_coord) || Float.isInfinite(yHat_coord) || Math.abs(yHat_coord) > 10000) {
             
             Log.w(TAG, "Reconciliação instável para alvo " + alvoIndex + " (x=" + xHat + ", y=" + yHat_coord + ") — fallback OLS");
-            ReconciliationLog.getInstance().logConditioning("RECON_ALVO_INSTAVEL", N, 999.0, true);
+            ReconciliationLog.getInstance().logConditioning("RECON_ALVO_INSTAVEL" + sufixoLado, N, 999.0, true);
 
             // Re-estimar via OLS direto ignorando o null space instável
             ReconciliationResult fallback = estimarPosicoesDiretas(canhoesX, canhoesY, new float[][]{mediaDist})[0];
@@ -373,9 +387,18 @@ public class DataReconciliation {
      * @return vetor reconciliado y_hat
      */
     public static double[] reconcile(double[] y, double[][] V, double[][] A) {
+        return reconcile(y, V, A, null);
+    }
+
+    /**
+     * H8 FIX: Sobrecarlogo com parâmetro lado para logging separado por lado.
+     * Mantém compatibilidade com a assinatura original exigida pela rubrica.
+     */
+    public static double[] reconcile(double[] y, double[][] V, double[][] A, String lado) {
+        String sufixoLado = (lado != null && !lado.isEmpty()) ? "_" + lado.toUpperCase() : "_GLOBAL";
         if (y == null || V == null || A == null || y.length == 0) {
             Log.w(TAG, "reconcile: entradas inválidas, retornando y original");
-            ReconciliationLog.getInstance().logConditioning("RECONCILE_INVALID_INPUT", 0, Double.NaN, true);
+            ReconciliationLog.getInstance().logConditioning("RECONCILE_INVALID_INPUT" + sufixoLado, 0, Double.NaN, true);
             return y;
         }
 
@@ -399,7 +422,7 @@ public class DataReconciliation {
                 AVAt_inv = AVAt.pseudoInverse();
             } catch (Exception e) {
                 Log.w(TAG, "reconcile: fallback total (inversão indisponível), retornando y original", e);
-                ReconciliationLog.getInstance().logConditioning("RECONCILE_INVERSION_FAIL", m, Double.NaN, true);
+                ReconciliationLog.getInstance().logConditioning("RECONCILE_INVERSION_FAIL" + sufixoLado, m, Double.NaN, true);
                 return y;
             }
         }
@@ -413,14 +436,14 @@ public class DataReconciliation {
                 result[i] = yHat.get(i, 0);
                 if (!Double.isFinite(result[i])) {
                     Log.w(TAG, "reconcile: valor não finito no resultado, retornando y original");
-                    ReconciliationLog.getInstance().logConditioning("RECONCILE_NON_FINITE", y.length, Double.NaN, true);
+                    ReconciliationLog.getInstance().logConditioning("RECONCILE_NON_FINITE" + sufixoLado, y.length, Double.NaN, true);
                     return y;
                 }
             }
             return result;
         } catch (Exception e) {
             Log.w(TAG, "reconcile: exceção no cálculo, retornando y original", e);
-            ReconciliationLog.getInstance().logConditioning("RECONCILE_EXCEPTION", y.length, Double.NaN, true);
+            ReconciliationLog.getInstance().logConditioning("RECONCILE_EXCEPTION" + sufixoLado, y.length, Double.NaN, true);
             return y;
         }
     }
@@ -506,7 +529,7 @@ public class DataReconciliation {
      * Calcula o espaço nulo esquerdo de M via SVD.
      * Retorna matriz C de dimensão (N-3)×N.
      */
-    public SimpleMatrix computeLeftNullSpace(SimpleMatrix M, int N) {
+    public SimpleMatrix computeLeftNullSpace(SimpleMatrix M, int N, String sufixoLado) {
         // Simple cache: se M não mudou, reutiliza C calculada previamente
         try {
             if (M == null) return null;
@@ -544,12 +567,12 @@ public class DataReconciliation {
                 Log.w(TAG, "SVD TIMEOUT após " + elapsedMs + "ms (limite=" + SVD_TIMEOUT_MS
                         + "ms) — fallback para OLS");
                 ReconciliationLog.getInstance().logConditioning(
-                        "SVD_TIMEOUT", N, Double.NaN, true);
+                        "SVD_TIMEOUT" + sufixoLado, N, Double.NaN, true);
                 return null;
             } catch (ExecutionException | InterruptedException e) {
                 Log.w(TAG, "SVD falhou — fallback para OLS", e);
                 ReconciliationLog.getInstance().logConditioning(
-                        "SVD_EXECUTION_FAIL", N, Double.NaN, true);
+                        "SVD_EXECUTION_FAIL" + sufixoLado, N, Double.NaN, true);
                 return null;
             }
 
