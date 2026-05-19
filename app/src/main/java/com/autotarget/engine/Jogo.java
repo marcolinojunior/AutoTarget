@@ -1033,17 +1033,18 @@ public class Jogo {
      */
     private float calcularEnergiaRegenerada(Alvo alvo) {
         long idadeMs = alvo.getIdadeMs();
-        // H5 FIX: Modelo balanceado — abates rápidos geram lucro energético,
-        // abates médios compensam o consumo base, abates lentos dão sobrevida mínima.
-        // Consumo base = 1f/s por canhão. Com 5 canhões = 5f/s.
-        // Abate <2s: +3.0f (lucro líquido com 5 canhões em 2s: 3.0 - 10.0 = -7.0, mas compensa em volume)
-        // Abate <4s: +1.5f (quase compensa 5 canhões em 4s: 1.5 - 20.0 = -18.5, mas com múltiplos abates acumula)
-        // Abate <7s: +0.8f (recuperação parcial)
-        // Abate >7s: +0.3f (sobrevida mínima)
-        if (idadeMs < 2000) return 3.0f;
-        if (idadeMs < 4000) return 1.5f;
-        if (idadeMs < 7000) return 0.8f;
-        return 0.3f;
+        // H5 FIX: Modelo balanceado — abates rápidos geram bônus moderado,
+        // abates médios compensam parcialmente, abates lentos dão sobrevida mínima.
+        // Consumo base = 1f/s por canhão. Mantemos o bônus <= 1.0f para evitar
+        // inflação energética e cumprir o cenário de escassez (AV2).
+        // Abate <2s: +1.0f (cap máximo — coerente com EnergyScarcityTest)
+        // Abate <4s: +0.6f
+        // Abate <7s: +0.3f
+        // Abate >7s: +0.1f
+        if (idadeMs < 2000) return 1.0f;
+        if (idadeMs < 4000) return 0.6f;
+        if (idadeMs < 7000) return 0.3f;
+        return 0.1f;
     }
 
     // ── Helpers ──────────────────────────────────────────────────
