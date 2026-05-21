@@ -154,7 +154,7 @@ public class RMAAnalysis {
     }
 
     /**
-     * Exporta os deadline misses por tarefa para um arquivo CSV.
+     * Exporta os deadline misses por tarefa para um arquivo CSV na pasta de Downloads.
      * Atende ao item 35 da rubrica AV2.
      */
     public static void exportDeadlineMissesToCSV(android.content.Context context) {
@@ -171,9 +171,11 @@ public class RMAAnalysis {
                     stats.maxResponseMs, avg, mode));
         }
         
-        try (java.io.FileOutputStream fos = context.openFileOutput(filename, android.content.Context.MODE_PRIVATE)) {
+        java.io.File path = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+        java.io.File file = new java.io.File(path, filename);
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
             fos.write(sb.toString().getBytes());
-            Log.i(TAG, "Métricas STR exportadas para: " + filename);
+            Log.i(TAG, "Métricas STR exportadas para: " + file.getAbsolutePath());
         } catch (Exception e) {
             Log.e(TAG, "Erro ao exportar CSV de deadlines: " + e.getMessage());
         }

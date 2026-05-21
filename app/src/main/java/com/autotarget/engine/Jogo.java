@@ -1041,7 +1041,7 @@ public class Jogo {
         // Abate <4s: +0.6f
         // Abate <7s: +0.3f
         // Abate >7s: +0.1f
-        if (idadeMs < 2000) return 1.0f;
+        if (idadeMs < 2000) return 3.5f;
         if (idadeMs < 4000) return 0.6f;
         if (idadeMs < 7000) return 0.3f;
         return 0.1f;

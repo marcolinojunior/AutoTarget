@@ -2,9 +2,15 @@ package com.autotarget.util;
 
 import com.autotarget.model.Lado;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import android.os.Environment;
+import android.util.Log;
 
 
 /**
@@ -65,17 +71,17 @@ public final class ReconciliationLog {
         public final Double uMais1;
         public final Double uMenos1;
         public final double limiarGanho;
-        public final float energiaLado;
+        public final float energyLado;
 
         UtilitySample(String lado, int nCanhoes, double uAtual, Double uMais1,
-                      Double uMenos1, double limiarGanho, float energiaLado) {
+                      Double uMenos1, double limiarGanho, float energyLado) {
             this.lado = lado;
             this.nCanhoes = nCanhoes;
             this.uAtual = uAtual;
             this.uMais1 = uMais1;
             this.uMenos1 = uMenos1;
             this.limiarGanho = limiarGanho;
-            this.energiaLado = energiaLado;
+            this.energyLado = energyLado;
         }
     }
 
@@ -285,13 +291,13 @@ public final class ReconciliationLog {
 
     public synchronized void logUtilityComparison(String lado, int nCanhoes, double uAtual,
                                                   Double uMais1, Double uMenos1,
-                                                  double limiarGanho, float energiaLado) {
-        utilitySamples.add(new UtilitySample(lado, nCanhoes, uAtual, uMais1, uMenos1, limiarGanho, energiaLado));
+                                                  double limiarGanho, float energyLado) {
+        utilitySamples.add(new UtilitySample(lado, nCanhoes, uAtual, uMais1, uMenos1, limiarGanho, energyLado));
         String mais1 = (uMais1 == null) ? "N/A" : String.format(Locale.US, "%.3f", uMais1);
         String menos1 = (uMenos1 == null) ? "N/A" : String.format(Locale.US, "%.3f", uMenos1);
         appendEvento(String.format(Locale.US,
                 "UTILITY lado=%s N=%d U(N)=%.3f U(N+1)=%s U(N-1)=%s limiar=%.3f energia=%.1f",
-                lado, nCanhoes, uAtual, mais1, menos1, limiarGanho, energiaLado));
+                lado, nCanhoes, uAtual, mais1, menos1, limiarGanho, energyLado));
     }
 
     public synchronized void logEnergyPenalty(float energiaEsq, float energiaDir,
@@ -776,7 +782,7 @@ public final class ReconciliationLog {
                 sb.append(String.format(Locale.US, "%d,%.6f,%.6f,%.2f,%.4f,%.8f,%s\n",
                         i, s.mseBruto, s.mseRecon, reducao, s.erroPos, s.normA, s.lado));
             }
-            writeCSV(context, filename, sb.toString());
+            writeCSV(filename, sb.toString());
             arquivos.add(filename);
         } catch (Exception e) {
             android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de reconciliação", e);
@@ -793,7 +799,7 @@ public final class ReconciliationLog {
                         i, s.energiaEsq, s.energiaDir, s.canhoesEsq, s.canhoesDir,
                         s.intervaloEsqMs, s.intervaloDirMs));
             }
-            writeCSV(context, filename, sb.toString());
+            writeCSV(filename, sb.toString());
             arquivos.add(filename);
         } catch (Exception e) {
             android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de energia", e);
@@ -804,7 +810,7 @@ public final class ReconciliationLog {
             String filename = "telemetry_rma_runtime.csv";
             String rmaCSV = RMAAnalysis.getRuntimeMetricsReport();
             if (rmaCSV != null && !rmaCSV.isEmpty()) {
-                writeCSV(context, filename, rmaCSV);
+                writeCSV(filename, rmaCSV);
                 arquivos.add(filename);
             }
         } catch (Exception e) {
@@ -822,7 +828,7 @@ public final class ReconciliationLog {
                         i, s.lado, s.mediaX, s.varX, s.mediaY, s.varY,
                         s.mediaVelX, s.varVelX, s.mediaVelY, s.varVelY));
             }
-            writeCSV(context, filename, sb.toString());
+            writeCSV(filename, sb.toString());
             arquivos.add(filename);
         } catch (Exception e) {
             android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de sensores", e);
@@ -839,9 +845,9 @@ public final class ReconciliationLog {
                         i, s.lado, s.nCanhoes, s.uAtual,
                         s.uMais1 != null ? String.format(Locale.US, "%.6f", s.uMais1) : "N/A",
                         s.uMenos1 != null ? String.format(Locale.US, "%.6f", s.uMenos1) : "N/A",
-                        s.limiarGanho, s.energiaLado));
+                        s.limiarGanho, s.energyLado));
             }
-            writeCSV(context, filename, sb.toString());
+            writeCSV(filename, sb.toString());
             arquivos.add(filename);
         } catch (Exception e) {
             android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de utilidade", e);
@@ -857,7 +863,7 @@ public final class ReconciliationLog {
                 sb.append(String.format(Locale.US, "%d,%s,%.2f,%.2f,%d\n",
                         i, s.lado, s.energiaRestaurada, s.energiaApos, s.alvosAbatidosCumulativo));
             }
-            writeCSV(context, filename, sb.toString());
+            writeCSV(filename, sb.toString());
             arquivos.add(filename);
         } catch (Exception e) {
             android.util.Log.e("TelemetryCSV", "Erro ao exportar CSV de restauração", e);
@@ -869,12 +875,17 @@ public final class ReconciliationLog {
     }
 
     /**
-     * Escreve conteúdo em um arquivo CSV no armazenamento interno do app.
+     * Escreve conteúdo em um arquivo CSV na pasta de Downloads do sistema.
      */
-    private static void writeCSV(android.content.Context context, String filename, String content) throws java.io.IOException {
-        try (java.io.FileOutputStream fos = context.openFileOutput(filename, android.content.Context.MODE_PRIVATE)) {
-            fos.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            android.util.Log.i("TelemetryCSV", "CSV gerado: " + filename
+    private static void writeCSV(String filename, String content) throws IOException {
+        File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!path.exists()) {
+            path.mkdirs();
+        }
+        File file = new File(path, filename);
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(content.getBytes(StandardCharsets.UTF_8));
+            Log.i("TelemetryCSV", "CSV gerado no Download: " + file.getAbsolutePath()
                     + " (" + content.length() + " bytes)");
         }
     }

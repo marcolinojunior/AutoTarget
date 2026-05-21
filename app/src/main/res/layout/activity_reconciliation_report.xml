@@ -117,6 +117,15 @@
                 android:textColor="#FFFFFF"
                 android:backgroundTint="#00B4D8"
                 android:layout_marginStart="8dp" />
+
+            <Button
+                android:id="@+id/btnViewCSV"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ver Dados"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#4ECCA3"
+                android:layout_marginStart="8dp" />
         </LinearLayout>
 
         <LinearLayout

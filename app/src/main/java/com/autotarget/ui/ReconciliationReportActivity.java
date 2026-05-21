@@ -80,9 +80,15 @@ public class ReconciliationReportActivity extends AppCompatActivity {
                 Toast.makeText(this, "Nenhum dado para exportar.", Toast.LENGTH_SHORT).show();
             } else {
                 Toast.makeText(this,
-                        "✅ " + csvFiles.size() + " CSVs exportados para armazenamento interno!",
+                        "✅ " + csvFiles.size() + " CSVs exportados para a pasta Download!",
                         Toast.LENGTH_LONG).show();
             }
+        });
+
+        Button btnViewCSV = findViewById(R.id.btnViewCSV);
+        btnViewCSV.setOnClickListener(v -> {
+            android.content.Intent intent = new android.content.Intent(this, CsvViewerActivity.class);
+            startActivity(intent);
         });
 
         TextView tvResumoAdaptativo = new TextView(this);
