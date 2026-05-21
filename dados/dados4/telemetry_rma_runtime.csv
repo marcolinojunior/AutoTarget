@@ -1,0 +1,10 @@
+RUNTIME_METRICS
+task,executions,max_ms,avg_ms,stddev_ms,deadline_misses
+T1-Physics,18558,75.000,0.239,1.880,48
+T2-Projetil,11861,77.000,0.200,1.772,21
+T3-Alvo,87758,112.000,0.028,0.682,5
+T4-Render,9041,931.000,29.458,31.059,1606
+T5-GameTimer,300,77.000,2.590,7.126,0
+T6-Canhao,1459,85.000,1.031,4.915,0
+T7-Sensor,300,60.000,2.803,6.650,0
+T8-Reconciliacao,100,915.000,13.410,91.558,0

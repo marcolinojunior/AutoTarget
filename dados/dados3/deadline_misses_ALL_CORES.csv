@@ -1,0 +1,9 @@
+TaskID,Executions,DeadlineMisses,MaxResponseMs,AvgResponseMs,AffinityMode
+T8-Reconciliacao,80,0,915.00,15.99,ALL_CORES
+T2-Projetil,9634,21,77.00,0.23,ALL_CORES
+T7-Sensor,240,0,60.00,3.27,ALL_CORES
+T1-Physics,14807,48,75.00,0.29,ALL_CORES
+T4-Render,7170,1542,931.00,31.42,ALL_CORES
+T3-Alvo,72257,5,112.00,0.03,ALL_CORES
+T6-Canhao,1163,0,85.00,1.15,ALL_CORES
+T5-GameTimer,240,0,77.00,3.04,ALL_CORES
